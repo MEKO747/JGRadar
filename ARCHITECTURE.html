@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JGRadar 架构图 · 雷达站视觉算法核心</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2128; --line:#30363d;
+    --text:#e6edf3; --muted:#8b949e; --dim:#6e7681;
+    --contract:#a371f7; --config:#58a6ff; --offline:#d29922; --input:#3fb950;
+    --sense:#2f81f7; --track:#f778ba; --fuse:#ff7b72; --orch:#39c5cf; --verify:#7ee787;
+    --arrow:#58a6ff;
+  }
+  body.light{
+    --bg:#ffffff; --panel:#f6f8fa; --panel2:#eef1f4; --line:#d0d7de;
+    --text:#1f2328; --muted:#59636e; --dim:#818b98; --arrow:#0969da;
+    --contract:#8250df; --config:#0969da; --offline:#9a6700; --input:#1a7f37;
+    --sense:#0550ae; --track:#bf3989; --fuse:#cf222e; --orch:#1b7c83; --verify:#116329;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Hiragino Sans GB",system-ui,-apple-system,"Segoe UI",sans-serif;
+    font-size:15px; line-height:1.6; -webkit-font-smoothing:antialiased;
+  }
+  code,.mono{font-family:"JetBrains Mono","Cascadia Code",Consolas,"SF Mono",Menlo,monospace;font-size:.86em}
+  a{color:var(--config)}
+
+  header{
+    border-bottom:1px solid var(--line); padding:22px 28px 18px;
+    background:linear-gradient(180deg,var(--panel) 0%,transparent 100%);
+    position:sticky; top:0; z-index:20; backdrop-filter:blur(6px);
+  }
+  .head-row{display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap;max-width:1500px;margin:0 auto}
+  h1{font-size:22px;margin:0;letter-spacing:.5px}
+  h1 span{color:var(--sense)}
+  .sub{color:var(--muted);font-size:13px;margin-top:4px}
+  .spacer{flex:1}
+  button.tool{
+    background:var(--panel2);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:7px 13px;font-size:13px;cursor:pointer;font-family:inherit;
+  }
+  button.tool:hover{border-color:var(--config);color:var(--config)}
+  button.tool.on{background:var(--config);border-color:var(--config);color:#fff}
+
+  .wrap{max-width:1500px;margin:0 auto;padding:22px 28px 60px;display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:26px;align-items:start}
+  @media (max-width:1080px){.wrap{grid-template-columns:1fr}}
+
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 18px;font-size:12px;color:var(--muted)}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+
+  .flow{display:flex;flex-direction:column;align-items:stretch}
+
+  .layer{
+    border:1px solid var(--line); border-left:4px solid var(--lc,var(--line));
+    border-radius:12px; background:var(--panel); overflow:hidden;
+    transition:box-shadow .18s,border-color .18s;
+  }
+  .layer:hover{box-shadow:0 0 0 1px var(--lc),0 8px 26px rgba(0,0,0,.28)}
+  .layer-head{
+    display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+    padding:11px 16px; background:var(--panel2); border-bottom:1px solid var(--line);
+  }
+  .layer-title{font-weight:700;font-size:15px;color:var(--lc)}
+  .layer-file{color:var(--dim);font-size:12.5px}
+  .layer-note{color:var(--muted);font-size:12.5px;margin-left:auto;text-align:right}
+  .chips{display:flex;flex-wrap:wrap;gap:10px;padding:14px 16px}
+  .chips.col{flex-direction:column;gap:8px}
+
+  .chip{
+    border:1px solid var(--line); border-radius:9px; background:var(--panel2);
+    padding:8px 12px; cursor:pointer; min-width:0; flex:1 1 210px;
+    transition:transform .12s,border-color .12s,background .12s;
+    position:relative;
+  }
+  .chip:hover{transform:translateY(-2px);border-color:var(--lc);background:var(--panel)}
+  .chip.active{border-color:var(--lc);box-shadow:0 0 0 1px var(--lc) inset}
+  .chip .n{font-weight:600;font-size:13.5px}
+  .chip .d{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .chip .s{color:var(--dim);font-size:11.5px;margin-top:4px;display:none}
+  body.detail .chip .s{display:block}
+  .chip .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--lc);margin-right:7px;vertical-align:1px}
+  .chip small{color:var(--dim);font-size:11px;display:block;margin-top:3px}
+
+  /* 箭头 */
+  .arrow{position:relative;height:54px;display:flex;justify-content:center}
+  .arrow .stem{position:absolute;top:0;bottom:12px;width:2px;background:linear-gradient(180deg,transparent,var(--arrow))}
+  .arrow .tri{position:absolute;bottom:0;width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:11px solid var(--arrow)}
+  .arrow .lab{
+    position:absolute;left:50%;top:50%;transform:translate(22px,-50%);
+    background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+    padding:4px 10px;font-size:12px;color:var(--muted);white-space:nowrap;
+    max-width:min(760px,72vw);overflow:hidden;text-overflow:ellipsis;
+  }
+  .arrow.bidir .lab{transform:translate(22px,-50%)}
+  .arrow.side{height:44px}
+
+  .insets{display:grid;grid-template-columns:1fr;gap:20px;margin-top:26px}
+  .card{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:16px 18px}
+  .card h3{margin:0 0 4px;font-size:15px}
+  .card p.hint{margin:0 0 14px;color:var(--muted);font-size:12.5px}
+  svg{max-width:100%;height:auto;display:block}
+
+  aside{
+    position:sticky; top:104px; border:1px solid var(--line); border-radius:12px;
+    background:var(--panel); padding:16px 18px; min-height:220px;
+  }
+  aside h2{margin:0 0 4px;font-size:15px}
+  aside .path{color:var(--dim);font-size:12px;margin-bottom:12px}
+  aside dl{margin:0;font-size:13px}
+  aside dt{color:var(--muted);font-size:11.5px;margin-top:11px;text-transform:uppercase;letter-spacing:.6px}
+  aside dd{margin:3px 0 0}
+  aside .empty{color:var(--dim);font-size:13px}
+  aside ul{margin:4px 0 0;padding-left:18px}
+  aside li{margin:2px 0}
+
+  table.tiers{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:6px}
+  table.tiers td{padding:6px 8px;border-bottom:1px solid var(--line)}
+  table.tiers tr:last-child td{border-bottom:none}
+  table.tiers td.k{color:var(--muted);width:96px}
+  .bar{height:9px;border-radius:5px;background:var(--fuse);opacity:.85;display:inline-block;vertical-align:middle}
+
+  footer{max-width:1500px;margin:0 auto;padding:0 28px 50px;color:var(--muted);font-size:12.5px}
+  footer code{color:var(--text)}
+  .kv{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .pill{border:1px solid var(--line);border-radius:99px;padding:3px 11px;font-size:12px;color:var(--muted);background:var(--panel2)}
+  .pill.warn{border-color:var(--offline);color:var(--offline)}
+  .pill.ok{border-color:var(--verify);color:var(--verify)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="head-row">
+    <div>
+      <h1>JGRadar <span>架构图</span></h1>
+      <div class="sub">RoboMaster 雷达站视觉算法核心 · 不含相机驱动 / 串口 / UI · schema <code>jg.radar.robot.v1</code></div>
+    </div>
+    <div class="spacer"></div>
+    <button class="tool" id="btnDetail">显示细节</button>
+    <button class="tool" id="btnTheme">切换主题</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <main>
+    <div class="legend">
+      <span><i style="background:var(--contract)"></i>契约</span>
+      <span><i style="background:var(--config)"></i>配置</span>
+      <span><i style="background:var(--offline)"></i>离线工具链</span>
+      <span><i style="background:var(--input)"></i>输入/输出</span>
+      <span><i style="background:var(--sense)"></i>Stage A 感知</span>
+      <span><i style="background:var(--track)"></i>Stage B 跟踪</span>
+      <span><i style="background:var(--fuse)"></i>Stage B 融合</span>
+      <span><i style="background:var(--orch)"></i>编排</span>
+      <span><i style="background:var(--verify)"></i>验证</span>
+    </div>
+
+    <div class="flow">
+
+      <!-- 配置层 -->
+      <section class="layer" style="--lc:var(--config)">
+        <div class="layer-head">
+          <div class="layer-title">配置层</div>
+          <div class="layer-file">config/{default,camera,field}.yaml + jg_radar/config/</div>
+          <div class="layer-note">9 段 · 未知键/重复键启动即败 · frozen dataclass</div>
+        </div>
+        <div class="chips">
+          <div class="chip" data-k="loader"><div class="n"><span class="dot"></span>loader.load_config(*paths)</div><div class="d">后加载覆盖先加载，映射递归合并</div><div class="s">_StrictLoader 拒绝重复键并报行号</div></div>
+          <div class="chip" data-k="schema"><div class="n"><span class="dot"></span>schema.RadarConfig</div><div class="d">全 dataclass，多一个未知键就 ConfigError</div><div class="s">camera · field · transform · detect · track · fuse · pipeline · io · diagnostics</div></div>
+        </div>
+      </section>
+
+      <div class="arrow"><span class="stem"></span><span class="tri"></span><span class="lab mono">RadarConfig（frozen，全部阈值集中在此）</span></div>
+
+      <!-- 离线工具链 -->
+      <section class="layer" style="--lc:var(--offline)">
+        <div class="layer-head">
+          <div class="layer-title">离线工具链 · 一次性，产物落盘</div>
+          <div class="layer-file">tools/</div>
+          <div class="layer-note">运行时零 3D 库依赖（走预计算查找表）</div>
+        </div>
+        <div class="chips">
+          <div class="chip" data-k="stp"><div class="n"><span class="dot"></span>stp_to_mesh.py</div><div class="d">STEP → PLY/npz 场地网格</div><div class="s">gmsh 优先，OCP 兜底；面积抽稀后 save_ply</div></div>
+          <div class="chip" data-k="calib"><div class="n"><span class="dot"></span>calibrate_extrinsics.py</div><div class="d">关键点 PnP RANSAC → R / t + 残差</div><div class="s">残差不过门限（RMS&lt;3px）拒绝写文件</div></div>
+          <div class="chip" data-k="buildlut"><div class="n"><span class="dot"></span>build_lookup_map.py</div><div class="d">相机+外参+网格 → lookup.npz</div><div class="s">coords_cm / valid / occluded / signature；--dry-run 预估耗时</div></div>
+          <div class="chip" data-k="validate"><div class="n"><span class="dot"></span>validate_alignment.py</div><div class="d">反投影 RMS&lt;3px · 往返&lt;2cm</div><div class="s">不过门限退出码非零（回归门）</div></div>
+        </div>
+      </section>
+
+      <div class="arrow"><span class="stem"></span><span class="tri"></span><span class="lab mono">lookup.npz（带签名的像素→场地表） · mesh / R,t</span></div>
+
+      <!-- 输入层 -->
+      <section class="layer" style="--lc:var(--input)">
+        <div class="layer-head">
+          <div class="layer-title">输入层</div>
+          <div class="layer-file">jg_radar/io/</div>
+          <div class="layer-note">is_live 决定时钟语义</div>
+        </div>
+        <div class="chips">
+          <div class="chip" data-k="src"><div class="n"><span class="dot"></span>FrameSource</div><div class="d">Synthetic / Replay(自带标定) / camera ✗</div><div class="s">camera 直接 ValueError，不静默退回合成帧</div></div>
+          <div class="chip" data-k="sink"><div class="n"><span class="dot"></span>Sink</div><div class="d">JsonlSink / NullSink</div><div class="s">逐字节确定性；to_dict → jg.radar.robot.v1</div></div>
+        </div>
+      </section>
+
+      <div class="arrow"><span class="stem"></span><span class="tri"></span><span class="lab mono">Frame(seq, captured_at, image | cascade)</span></div>
+
+      <!-- Stage A -->
+      <section class="layer" style="--lc:var(--sense)">
+        <div class="layer-head">
+          <div class="layer-title">Stage A · 感知</div>
+          <div class="layer-file">pipeline/stage_a.py</div>
+          <div class="layer-note">无状态、可重入 · 只做转换，不做判断</div>
+        </div>
+        <div class="chips">
+          <div class="chip" data-k="cascade"><div class="n"><span class="dot"></span>detect/ 三级级联</div><div class="d">CarDetector → ArmorDetector(ROI 拼图批量) → DigitClassifier</div><div class="s">推理失败降级为空，不抛出；digits[j] 与 armors[j] 下标对齐</div></div>
+          <div class="chip" data-k="backend"><div class="n"><span class="dot"></span>DetectorBackend 协议</div><div class="d">onnx | stub | empty | blob(仅测试)</div><div class="s">trt/torch 未实现，配了直接拒绝启动</div></div>
+          <div class="chip" data-k="lookup"><div class="n"><span class="dot"></span>transform/ LookupMap</div><div class="d">框底边中点 → 场地 cm；遮挡单独成掩码</div><div class="s">签名/模式不符 → 拒绝启动；底边中点而非框中心</div></div>
+        </div>
+      </section>
+
+      <div class="arrow"><span class="stem"></span><span class="tri"></span><span class="lab mono">StageAPacket(frame_seq, captured_at, observations = TrackObservation[])</span></div>
+
+      <!-- 信箱 -->
+      <section class="layer" style="--lc:var(--orch)">
+        <div class="layer-head">
+          <div class="layer-title">信箱 · 两级之间</div>
+          <div class="layer-file">pipeline/mailbox.py</div>
+          <div class="layer-note">时效性优先于完整性</div>
+        </div>
+        <div class="chips">
+          <div class="chip" data-k="mailbox"><div class="n"><span class="dot"></span>Mailbox(capacity=2)</div><div class="d">只留最新一帧，积压的旧帧全部丢弃并计数</div><div class="s">整包冻结在采集时刻：包内只有一个 captured_at</div></div>
+        </div>
+      </section>
+
+      <div class="arrow"><span class="stem"></span><span class="tri"></span><span class="lab mono">最新包（丢帧可观测：mailbox_dropped）</span></div>
+
+      <!-- Stage B-1 跟踪 -->
+      <section class="layer" style="--lc:var(--track)">
+        <div class="layer-head">
+          <div class="layer-title">Stage B-1 · 跟踪</div>
+          <div class="layer-file">jg_radar/track/ · MultiTracker.step(obs, now=captured_at)</div>
+          <div class="layer-note">有状态 · 顺序不可换</div>
+        </div>
+        <div class="chips">
+          <div class="chip" data-k="tracker"><div class="n"><span class="dot"></span>MultiTracker.step</div><div class="d">外推 → 关联 → 更新 → 新建 → 状态机 → 身份 → 回收</div><div class="s">三条不上报：身份未定 / 轨迹未确认 / 投不到地面</div></div>
+          <div class="chip" data-k="assoc"><div class="n"><span class="dot"></span>association.py</div><div class="d">三闸：原始跳变 + χ² + 类别硬拒 → 代价 → 匈牙利</div><div class="s">NaN 一律拒；FORBIDDEN_COST 用大有限值而非 inf</div></div>
+          <div class="chip" data-k="kalman"><div class="n"><span class="dot"></span>kalman.py</div><div class="d">BoxKalman(像素) + WorldKalman(场地 cm)</div><div class="s">Joseph 形式；dt 钳在 [1/120, 0.5]s</div></div>
+          <div class="chip" data-k="state"><div class="n"><span class="dot"></span>state_machine.resolve_state</div><div class="d">四态纯函数判定</div><div class="s">与 TrackStatus（TENTATIVE/CONFIRMED/LOST/DEAD）是两条轴</div></div>
+          <div class="chip" data-k="identity"><div class="n"><span class="dot"></span>identity.py</div><div class="d">车类别定人，数字只印证；票权按半衰期衰减</div><div class="s">粘滞 + 切换余量防横跳；数字单独存在不投票</div></div>
+          <div class="chip" data-k="blind"><div class="n"><span class="dot"></span>blind.py</div><div class="d">盲区航点打分（速度余弦 + 距离衰减）</div><div class="s">没有候选就判 MISSING，绝不用恒速外推编坐标</div></div>
+        </div>
+      </section>
+
+      <div class="arrow"><span class="stem"></span><span class="tri"></span><span class="lab mono">{槽位名: RobotSlotOutput}（稀疏，只含身份已定的轨迹）</span></div>
+
+      <!-- Stage B-2 融合 -->
+      <section class="layer" style="--lc:var(--fuse)">
+        <div class="layer-head">
+          <div class="layer-title">Stage B-2 · 融合与仲裁</div>
+          <div class="layer-file">jg_radar/fuse/</div>
+          <div class="layer-note">在发布时刻做决策</div>
+        </div>
+        <div class="chips">
+          <div class="chip" data-k="vsrc"><div class="n"><span class="dot"></span>VisionSource / RadioSource</div><div class="d">槽位 → SourceSample（两源同一形状）</div><div class="s">MISSING 也必须写进缓冲：靠覆盖实现"撤回"</div></div>
+          <div class="chip" data-k="buffer"><div class="n"><span class="dot"></span>LatestValueBuffer</div><div class="d">键 =(source, name)，每格只留最新</div><div class="s">二元键缺了来源，仲裁会静默退化成"谁后写听谁的"</div></div>
+          <div class="chip" data-k="arbiter"><div class="n"><span class="dot"></span>Arbiter.decide</div><div class="d">优先级阶梯 + 滞回 + 位置误差上界</div><div class="s">预测态走 3σ，实测态走 信息年龄 × 最大速度</div></div>
+          <div class="chip" data-k="publish"><div class="n"><span class="dot"></span>PublishLayer.build</div><div class="d">补全全部槽位为 MISSING；锁死 observed_at 单调</div><div class="s">FrameOutput.validate()：坏数据不出进程</div></div>
+        </div>
+      </section>
+
+      <div class="arrow"><span class="stem"></span><span class="tri"></span><span class="lab mono">FrameOutput(robots, diagnostics) → validate() → sink</span></div>
+
+      <!-- 编排 -->
+      <section class="layer" style="--lc:var(--orch)">
+        <div class="layer-head">
+          <div class="layer-title">编排</div>
+          <div class="layer-file">jg_radar/pipeline/</div>
+          <div class="layer-note">两种跑法，默认单线程</div>
+        </div>
+        <div class="chips">
+          <div class="chip" data-k="loop"><div class="n"><span class="dot"></span>EventLoop / ThreadedEventLoop</div><div class="d">单线程确定性（回放/测试） · 双线程（实时，生产者按录制速度节流）</div><div class="s">生产者异常被原样抛给消费者，不静默吞掉</div></div>
+          <div class="chip" data-k="clock"><div class="n"><span class="dot"></span>default_clock</div><div class="d">帧源 is_live 决定 now 取采集时刻还是单调墙钟</div><div class="s">缺 is_live 直接 TypeError：猜错方向会静默失效</div></div>
+          <div class="chip" data-k="build"><div class="n"><span class="dot"></span>build_loop(config)</div><div class="d">唯一装配点：换相机/模型/权重只改 YAML</div><div class="s">回放自带标定优先；标定与 lookup_map_path 互斥</div></div>
+          <div class="chip" data-k="timings"><div class="n"><span class="dot"></span>Timings</div><div class="d">EMA 埋点 → FrameOutput.diagnostics</div><div class="s">stage_a / detect / project / track / fuse / publish</div></div>
+        </div>
+      </section>
+
+      <div class="arrow"><span class="stem"></span><span class="tri"></span><span class="lab mono">诊断指标 + 状态阶梯</span></div>
+
+      <!-- 验证层 -->
+      <section class="layer" style="--lc:var(--verify)">
+        <div class="layer-head">
+          <div class="layer-title">验证层</div>
+          <div class="layer-file">tests/ + tools/replay_runner.py</div>
+          <div class="layer-note">无需相机、无需权重、无需 GPU</div>
+        </div>
+        <div class="chips">
+          <div class="chip" data-k="tests"><div class="n"><span class="dot"></span>tests/ 25 文件 · 524 通过（14s）</div><div class="d">契约 / 变换往返 / 投影模式 / 卡尔曼闸门 / 仲裁滞回 / 回放</div><div class="s">含金标准 JSONL 与逐字节确定性检查</div></div>
+          <div class="chip" data-k="runner"><div class="n"><span class="dot"></span>replay_runner</div><div class="d">回放目录 → JSONL + 状态阶梯摘要</div><div class="s">退出码 0/1/2；契约违规（I1/I2/I3）让 CI 红掉</div></div>
+          <div class="chip" data-k="fixture"><div class="n"><span class="dot"></span>fixtures/replay_seq_001</div><div class="d">96 帧 manifest + cascade.jsonl + truth.jsonl</div><div class="s">检测级联是造出来的，投影链是真跑的</div></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- 附图 -->
+    <div class="insets">
+
+      <div class="card">
+        <h3>状态语义 · 四态与转移</h3>
+        <p class="hint">一个状态不是标签，而是 position / observed_at / confidence / std 四个量的一组取值约定。</p>
+        <svg viewBox="0 0 820 330" role="img" aria-label="跟踪状态机">
+          <defs>
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto">
+              <path d="M0,0 L7,3.2 L0,6.4 z" fill="var(--arrow)"/>
+            </marker>
+            <marker id="ahr" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto">
+              <path d="M0,0 L7,3.2 L0,6.4 z" fill="var(--fuse)"/>
+            </marker>
+          </defs>
+
+          <!-- MEASURED -->
+          <rect x="40" y="72" width="188" height="62" rx="10" fill="var(--panel2)" stroke="var(--track)" stroke-width="2"/>
+          <text x="134" y="100" text-anchor="middle" fill="var(--text)" font-size="15" font-weight="700">MEASURED</text>
+          <text x="134" y="119" text-anchor="middle" fill="var(--muted)" font-size="11.5">本帧真观测 · is_predicted=false</text>
+
+          <!-- OCCLUSION_HOLD -->
+          <rect x="330" y="72" width="200" height="62" rx="10" fill="var(--panel2)" stroke="var(--offline)" stroke-width="2"/>
+          <text x="430" y="100" text-anchor="middle" fill="var(--text)" font-size="15" font-weight="700">OCCLUSION_HOLD</text>
+          <text x="430" y="119" text-anchor="middle" fill="var(--muted)" font-size="11.5">卡尔曼外推 · 时间戳冻结</text>
+
+          <!-- BLIND_PREDICTION -->
+          <rect x="330" y="214" width="200" height="62" rx="10" fill="var(--panel2)" stroke="var(--fuse)" stroke-width="2"/>
+          <text x="430" y="242" text-anchor="middle" fill="var(--text)" font-size="15" font-weight="700">BLIND_PREDICTION</text>
+          <text x="430" y="261" text-anchor="middle" fill="var(--muted)" font-size="11.5">落在配置航点上，不是外推</text>
+
+          <!-- MISSING -->
+          <rect x="40" y="214" width="188" height="62" rx="10" fill="var(--panel2)" stroke="var(--dim)" stroke-width="2"/>
+          <text x="134" y="242" text-anchor="middle" fill="var(--text)" font-size="15" font-weight="700">MISSING</text>
+          <text x="134" y="261" text-anchor="middle" fill="var(--muted)" font-size="11.5">无坐标 · position_cm = None</text>
+
+          <!-- matched self loop -->
+          <path d="M100,72 C100,34 168,34 168,72" fill="none" stroke="var(--arrow)" stroke-width="2" marker-end="url(#ah)"/>
+          <text x="134" y="26" text-anchor="middle" fill="var(--muted)" font-size="11.5">关联上 matched</text>
+
+          <!-- MEASURED -> HOLD -->
+          <line x1="228" y1="103" x2="322" y2="103" stroke="var(--arrow)" stroke-width="2" marker-end="url(#ah)"/>
+          <text x="275" y="94" text-anchor="middle" fill="var(--muted)" font-size="11.5">未命中</text>
+          <text x="275" y="122" text-anchor="middle" fill="var(--muted)" font-size="11.5">age ≤ 0.8s</text>
+
+          <!-- HOLD -> BLIND -->
+          <line x1="430" y1="134" x2="430" y2="206" stroke="var(--arrow)" stroke-width="2" marker-end="url(#ah)"/>
+          <text x="440" y="176" fill="var(--muted)" font-size="11.5">age &gt; 0.8s</text>
+          <text x="440" y="192" fill="var(--muted)" font-size="11.5">且配了航点</text>
+
+          <!-- BLIND -> MISSING -->
+          <line x1="330" y1="245" x2="236" y2="245" stroke="var(--arrow)" stroke-width="2" marker-end="url(#ah)"/>
+          <text x="283" y="236" text-anchor="middle" fill="var(--muted)" font-size="11.5">age &gt; 3.0s</text>
+          <text x="283" y="265" text-anchor="middle" fill="var(--muted)" font-size="11.5">或无航点</text>
+
+          <!-- BLIND -> MEASURED (reacquire) -->
+          <path d="M330,232 C264,232 262,150 229,130" fill="none" stroke="var(--verify)" stroke-width="2" marker-end="url(#ah)"/>
+          <text x="292" y="192" fill="var(--verify)" font-size="11.5">重获：连续命中 ≥ 2</text>
+
+          <!-- MISSING -> reaped -->
+          <path d="M134,276 L134,306" fill="none" stroke="var(--fuse)" stroke-width="2" stroke-dasharray="4 4" marker-end="url(#ahr)"/>
+          <text x="146" y="304" fill="var(--fuse)" font-size="11.5">reap：轨迹删除（publish 在 reap 之前，越界那帧仍发一次）</text>
+
+          <!-- note -->
+          <text x="560" y="90" fill="var(--muted)" font-size="11.5">I1：is_predicted ⇔ state ∈</text>
+          <text x="560" y="107" fill="var(--muted)" font-size="11.5">{HOLD, BLIND}</text>
+          <text x="560" y="132" fill="var(--muted)" font-size="11.5">MISSING 不是预测</text>
+          <text x="560" y="149" fill="var(--muted)" font-size="11.5">（它没有坐标）</text>
+          <text x="560" y="238" fill="var(--muted)" font-size="11.5">坐标取不到时</text>
+          <text x="560" y="255" fill="var(--muted)" font-size="11.5">绝不补 (0,0)</text>
+        </svg>
+      </div>
+
+      <div class="card">
+        <h3>融合仲裁 · 优先级阶梯与两道闸</h3>
+        <p class="hint">先问"这是哪一种证据"（classify），再问"它现在还准不准"（误差上界）。两道闸刻意分开：否决必须计数。</p>
+        <table class="tiers">
+          <tr><td class="k">1 最高</td><td><b>radio_fresh</b> · 信息年龄 ≤ 0.2s</td><td style="width:120px"><span class="bar" style="width:100%"></span></td></tr>
+          <tr><td class="k">2</td><td><b>vision_measured</b> · 视觉看门狗 ≤ 0.5s</td><td><span class="bar" style="width:88%"></span></td></tr>
+          <tr><td class="k">3</td><td><b>radio_stale</b> · 信息年龄 ≤ 10s</td><td><span class="bar" style="width:62%"></span></td></tr>
+          <tr><td class="k">4</td><td><b>vision_occlusion_hold</b> · 卡尔曼外推</td><td><span class="bar" style="width:40%;opacity:.6"></span></td></tr>
+          <tr><td class="k">5 最低</td><td><b>vision_blind</b> · 航点盲猜</td><td><span class="bar" style="width:24%;opacity:.45"></span></td></tr>
+        </table>
+        <p class="hint" style="margin:12px 0 0">
+          <b>误差上界闸</b>：实测态 = 信息年龄 × 500 cm/s；预测态 = 3σ × position_std_cm。
+          超过 500 cm 即 veto（计数）。500 / 500 = <b>1.0 秒保质期</b>。<br>
+          <b>滞回</b>：现任源保持；挑战者需连续 dwell 0.3s，跳变 ≥ 150cm 时抬到 reacquire 0.8s。
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>两个时钟 · 绝不能混</h3>
+        <p class="hint">混用不会报错，只会让回放和实时的行为不一致。</p>
+        <div class="kv">
+          <span class="pill">captured_at → 推进滤波器（dt 必须是物理时间）</span>
+          <span class="pill">now → 新鲜度 / 看门狗 / 帧龄</span>
+          <span class="pill">回放：now = 帧时间线（帧龄恒 0，可复现）</span>
+          <span class="pill">实时：now = time.monotonic()</span>
+          <span class="pill warn">帧龄 &gt; 60s 或大幅为负 → ClockMismatch 直接抛</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <aside id="panel">
+    <h2>点左侧模块看详情</h2>
+    <div class="path">每个方块对应真实文件与配置键</div>
+    <div class="empty">选择一个模块（例如 <code>Arbiter.decide</code>）会显示它的职责、关键 API、读取的配置项，以及代码里明确警告过的失效模式。</div>
+  </aside>
+</div>
+
+<footer>
+  <div>契约三条不变式：<code>I1</code> is_predicted 与 state 自洽（预测永不伪装成测量） · <code>I2</code> 坐标必在 [0,2800]×[0,1500] cm · <code>I3</code> 同一槽位 observed_at 单调不回退（发布层锁死，replay_runner 独立复算）。</div>
+  <div class="kv" style="margin-top:12px">
+    <span class="pill ok">524 tests passed / 14s / 纯离线</span>
+    <span class="pill">单线程默认，逐字节可复现</span>
+    <span class="pill warn">尚未接线：build_loop 的 cascade 默认 None；io.camera 未实现；无真实相机 / 权重 / 场地图</span>
+  </div>
+  <div style="margin-top:14px;color:var(--dim)">本页为单文件自包含 HTML（无外部依赖），可直接双击打开或离线分发。</div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+
+  var DETAIL = {
+    loader:{path:"jg_radar/config/loader.py",role:"按顺序加载多份 YAML 并递归合并，再交给 schema 严格构造。",
+      api:["load_config(*paths)","load_yaml(path)","deep_merge(base, over)","load_config_with_paths()"],
+      config:["后加载者覆盖先加载者（default ← camera ← field）"],
+      warn:["_StrictLoader 拒绝重复键并报行号——YAML 规范下重复键会静默取后者，这类错极难发现。","无搜索路径、无环境变量：路径必须显式给出。"]},
+    schema:{path:"jg_radar/config/schema.py",role:"9 段 frozen dataclass，未知键一律 ConfigError。",
+      api:["RadarConfig.from_dict()","_coerce() / _build()"],
+      config:["camera · field · transform · detect · track · fuse · pipeline · io · diagnostics"],
+      warn:["多一个键就报错，且报出该组全部可用键。","类型强转严格：布尔不能当数值用，tuple 元数必须匹配。"]},
+    stp:{path:"tools/stp_to_mesh.py",role:"CAD STEP → 三角网格（离线，非关键路径）。",
+      api:["gmsh 优先，OCP/cadquery 兜底","_decimate() 面积抽稀","save_ply()"],
+      config:["field.mesh_path","field.mesh_to_field","field.unit_scale"],
+      warn:["CAD 原点是任意的：必须显式求解 CAD→场地的刚体变换，断言残差 < 2cm。"]},
+    calib:{path:"tools/calibrate_extrinsics.py",role:"≥6 组世界↔像素对应点求外参。",
+      api:["solve_pnp_ransac() → PnPResult","refine_pose()（LM 精化）","PnPResult.acceptable(rms<3px, max<8px)"],
+      config:["transform.R / transform.t","transform.reproj_rms_max_px","transform.reproj_max_px"],
+      warn:["残差不过门限**拒绝写文件**——写出一份坏外参比不写危险得多。","去畸变后必须换理想内参，否则重投影时畸变会被再施加一次。"]},
+    buildlut:{path:"tools/build_lookup_map.py",role:"把像素→世界这张表一次算好落盘，运行时只查表。",
+      api:["build_lookup_map(camera,R,t,plane_z,mode,mesh,stride)","LookupMap.save()（自动补 .npz）"],
+      config:["transform.projection_mode","transform.lookup_map_path","field.ground_plane_z"],
+      warn:["签名涵盖 分辨率+内参+畸变+外参+地面高度+投影模式+网格内容：任一变化即失效。","--dry-run 先实测 µs/射线，再线性外推总耗时。"]},
+    validate:{path:"tools/validate_alignment.py",role:"标定体检：反投影 + 射线往返两个指标必须同时看。",
+      api:["validate_alignment() → AlignmentReport","coverage_report()"],
+      config:["transform.reproj_rms_max_px = 3.0","transform.roundtrip_max_cm = 2.0"],
+      warn:["只看向返会漏掉系统性偏移，只看反投影会漏掉高程错误。","不过门限返回非零退出码，作为回归门。"]},
+    src:{path:"jg_radar/io/frame_source.py",role:"三种帧源，统一 Frame(seq, captured_at, image|cascade)。",
+      api:["SyntheticFrameSource","ReplayFrameSource（manifest.json 自描述标定）","ListFrameSource"],
+      config:["io.frame_source","io.replay_path"],
+      warn:["io.frame_source=camera 直接 ValueError：按时上报“没看到敌人”比启动失败危险得多。","回放源 is_live=False → now 取帧时间线，否则帧龄会是几十万秒。"]},
+    sink:{path:"jg_radar/io/sink.py",role:"输出落地。",
+      api:["JsonlSink(path, flush_every)","NullSink","read_jsonl()"],
+      config:["io.sink_path","diagnostics.jsonl_path"],
+      warn:["序列化不用 sort_keys，保持槽位顺序；时间戳 round 6、诊断 round 4。"]},
+    cascade:{path:"jg_radar/detect/",role:"整车 → 装甲板 → 数字 三级级联。",
+      api:["Cascade.run(frame) → CascadeResult","CarDetector.detect_rois()","ArmorDetector.detect()（RoiBatcher 拼图批量）","DigitClassifier.classify()"],
+      config:["detect.car_img_size / armor_img_size / digit_img_size","detect.roi_batch","detect.{car,armor,digit}_conf"],
+      warn:["数字顺序必须与装甲板严格等长同序，少一个会让后面全部错配且不报错。","valid_region 必须用 tile.valid_box：用 content_region() 会盖住整张画布，灰边假检测会漏进来。"]},
+    backend:{path:"jg_radar/detect/backends/",role:"可插拔推理后端。",
+      api:["DetectorBackend: name/input_size/is_ready + load()/infer()/warmup()","OnnxBackend · StubBackend · EmptyBackend · BlobBackend"],
+      config:["detect.backend = stub | empty | onnx","detect.{car,armor,digit}_model"],
+      warn:["trt / torch 未实现：配了会拒绝启动，绝不静默退回 stub。","推理失败降级为空结果而不是抛异常——检测层挂掉不该让雷达站停摆。"]},
+    lookup:{path:"jg_radar/transform/lookup_map.py",role:"运行时主路径：像素 → 场地 cm 的预计算表。",
+      api:["LookupMap.sample_bbox_ground()","LookupMap.occluded_bbox_ground()","compute_signature() / matches()"],
+      config:["transform.lookup_map_path","transform.projection_mode = ground_plane | mesh"],
+      warn:["锚点必须用**底边中点**：实测框中心会偏 87–182cm，而 switch_jump_cm 只有 150cm。","occluded 必须是独立掩码：撞墙 与 射线指向天空 是两件事。","签名或模式不符 → 拒绝启动（继续用不会报错，只会让每个坐标偏几十厘米）。"]},
+    mailbox:{path:"jg_radar/pipeline/mailbox.py",role:"两级之间的最新值信箱。",
+      api:["put() 满则挤掉最旧","take() / wait_latest() 取最新并丢弃其余","dropped 计数"],
+      config:["pipeline.mailbox_size = 2"],
+      warn:["队列语义在这里是错的：Stage B 卡 300ms 后从队头消费，会开始播一段 300ms 前的历史。","丢帧是可观测的坏消息，补旧数据是不可观测的坏消息。"]},
+    tracker:{path:"jg_radar/track/tracker.py",role:"多目标跟踪编排：每帧只做顺序编排，规则住在各自模块里。",
+      api:["MultiTracker.step(observations, now) → {槽位: RobotSlotOutput}","_publish() / _reap()"],
+      config:["track.min_hits","track.ttl_s","track.blind_waypoints"],
+      warn:["先全部更新再统一判状态：边更新边判会让先处理的轨迹用上后处理还没发生的效果。","publish 在 reap 之前，所以越 ttl 那一帧仍会发一次 MISSING。","同一槽位冲突时 _outranks 必须“本帧被观测”优先于累计命中数，否则幽灵压住活轨迹。"]},
+    assoc:{path:"jg_radar/track/association.py",role:"门 → 代价 → 匈牙利。",
+      api:["raw_jump_matrix()","gate_mask()（三闸取交）","build_cost_matrix()","associate(cost, max_cost)"],
+      config:["track.raw_jump_px","track.gate_chi2 = 9.49 (χ² 95%, 4 自由度)","track.max_cost","track.assoc_*_scale_*"],
+      warn:["NaN 的 χ² 一律拒：不能假装它合格。","类别不符是硬拒而不是代价。","FORBIDDEN_COST 用大有限值而非 inf，否则 scipy 对全 inf 行报矩阵不可行。","先求最优再筛代价：宁可漏配，不可错配。"]},
+    kalman:{path:"jg_radar/track/kalman.py",role:"两个滤波器：像素域管关联，场地域管输出。",
+      api:["BoxKalman(bbox, q, r)","WorldKalman(position_cm, q, r)","clamp_dt(dt)"],
+      config:["track.box_process_noise_px2 = 72000","track.process_noise_cm2 = 900","track.measurement_noise_cm2 = 25"],
+      warn:["过程噪声过小会让 χ² 门拒掉**自己的有效观测** → 永久分叉；回放里表现为“连续可见却断轨”。","Joseph 形式保正定；P=(I−KH)P 会让马氏距离变负数。"]},
+    state:{path:"jg_radar/track/state_machine.py",role:"四态判定，纯函数，无状态。",
+      api:["resolve_state(matched, age_s, previous, consecutive_hits, has_filter, has_waypoint, thresholds)"],
+      config:["track.lost_predict_s = 0.8","track.ttl_s = 3.0","track.reacquire_hits = 2"],
+      warn:["从 BLIND_PREDICTION 恢复需要连续 reacquire_hits：单帧假检测不该拽回一条盲区轨迹。","TrackStatus 是另一条轴，管生命周期，别和 RobotState 混。"]},
+    identity:{path:"jg_radar/track/identity.py",role:"身份是慢变量：票权按半衰期衰减，防止锁死在早期错误结论上。",
+      api:["corroborated_votes(car_class, digit)","IdentityVote.add_votes() / leader() / share()"],
+      config:["track.identity_half_life_s = 2.0","track.identity_switch_margin = 0.15","track.min_identity_share = 0.5"],
+      warn:["数字只用来**印证**身份，单独出现不投票（“1”是 R1 还是 B1？阵营不在数字里）。","挑战者票权要超出在职者一定比例才允许改标签，防止读数横跳变成身份横跳。"]},
+    blind:{path:"jg_radar/track/blind.py",role:"长时丢失时落到配置的盲区航点。",
+      api:["score_waypoint()（速度余弦 + 距离衰减）","choose_waypoint()（含最小驻留与重访惩罚）"],
+      config:["track.blind_waypoints","track.blind_min_dwell_s","track.blind_distance_decay_cm"],
+      warn:["**没有候选就判 MISSING**，不用恒速外推去编一个 3 秒后的位置。","盲区输出永不重置滤波器。"]},
+    vsrc:{path:"jg_radar/fuse/sources/",role:"把两个源都压成同一种形状。",
+      api:["VisionSource.submit(slots, now)","RadioSource.feed(readings, now)","RadioReading(name, position_cm, observed_at)"],
+      config:["fuse.priority 里的档位名"],
+      warn:["MISSING 也必须写进缓冲：写入即覆盖，等于“撤回”。优化掉它，仲裁会继续把已判定“不在了”的坐标当实时测量报出去。","无线电的 observed_at 必须是**空口接收时刻**：填 now 会让断流永远不可见；未来戳直接 raise。"]},
+    buffer:{path:"jg_radar/fuse/contract.py",role:"按机器人名索引的最新值缓冲，线程安全。",
+      api:["put(sample, now) / put_many() / snapshot()","StampedSample.information_age(now) / liveness_age(now)"],
+      config:["—"],
+      warn:["键必须是 (source, name)：少了来源，仲裁会静默退化成“谁后写听谁的”。","没有新样本时不清空槽位——把没更新的当成“从没听到过”是另一类错。"]},
+    arbiter:{path:"jg_radar/fuse/arbiter.py",role:"在发布时刻做决策：优先级阶梯 + 滞回 + 误差上界。",
+      api:["classify(stamped, now, cfg) → tier","position_error_bound_cm(sample, now)","Arbiter.decide(candidates, now) → {槽位: SlotDecision}"],
+      config:["fuse.priority（5 档）","fuse.radio_fresh_s = 0.2 / radio_stale_s = 10.0 / vision_watchdog_s = 0.5","fuse.dwell_s = 0.3 / switch_jump_cm = 150 / reacquire_s = 0.8","fuse.max_robot_speed_cm_s = 500 / max_position_error_cm = 500"],
+      warn:["两道闸刻意分开：classify 只回答“哪一种证据”，否决在 _admit 里做，因为否决必须计数（Arbiter.vetoed）。","预测态不看信息年龄（它的时间戳刻意冻结），改用 3σ ——否则每一条盲区预测都会被误杀。","现任源整个消失且驻留未满时，返回空决策“诚实说不知道”，而不是立刻采纳最优候选。"]},
+    publish:{path:"jg_radar/fuse/publish.py",role:"仲裁结果 → FrameOutput，两件事只有这里能做。",
+      api:["PublishLayer.build(decisions, frame_seq, captured_at, published_at)","_to_slot()"],
+      config:["fuse 的槽位集合（默认 R/B × 1,2,3,4,6,7）"],
+      warn:["补全全部槽位为 MISSING：对外协议是固定字段的，少一个槽位不是“没说”而是“格式错”。","observed_at 在这里被收紧为“槽位最后一次真正拿到信息的时刻”，否则换源会让时间戳往回走几十毫秒。","frame.validate()：坏数据不出进程。"]},
+    loop:{path:"jg_radar/pipeline/event_loop.py",role:"两种跑法，默认单线程。",
+      api:["EventLoop.run() → Iterator[FrameOutput]","ThreadedEventLoop（Stage A 后台线程 + Mailbox）"],
+      config:["pipeline.max_commit_age_s = 0.15"],
+      warn:["确定性比吞吐重要：并发会引入“同一份输入两次跑出不同结果”，金标准比对就失去意义。","线程版生产者默认按录制速度节流，否则信箱只留最新会把整段回放挤成 3 帧。"]},
+    clock:{path:"jg_radar/pipeline/event_loop.py",role:"时钟规则挂在帧源的 is_live 上，不挂在“跑几个线程”上。",
+      api:["default_clock(source) → frame_clock | wall_clock"],
+      config:["—（由帧源声明）"],
+      warn:["帧源没声明 is_live 直接 TypeError：**猜错的方向是会静默失效的那一个**（实时源当回放源 → 帧龄恒 0 → max_commit_age_s 永不触发）。"]},
+    build:{path:"jg_radar/pipeline/build.py",role:"唯一装配点：换相机、换模型、换权重都只改 YAML。",
+      api:["build_loop(config, frame_source, lookup, cascade, sink, threaded, clock)","build_lookup() / build_source() / build_stage_a() / build_stage_b()"],
+      config:["全部 9 段"],
+      warn:["回放标定与 lookup_map_path 互斥：两者只能取一个，否则投影链和 fixture 用的是两套参数。","⚠️ 现状：build_loop 的 cascade 默认 None，detect.factory.build_cascade() 在 jg_radar/ 内没有生产调用点。"]},
+    timings:{path:"jg_radar/pipeline/timings.py",role:"EMA 计时埋点，只测量、不参与任何判断。",
+      api:["Timings.measure(name) 上下文管理器","snapshot(unit='ms') → t_<name>_ms"],
+      config:["diagnostics.ema_alpha = 0.1"],
+      warn:["计时用 perf_counter 墙上时钟，正确性判断用帧时间线，两者不混。","t_publish_ms 实际是上一帧的值——写下来是为了别人别去对它。"]},
+    tests:{path:"tests/",role:"25 个文件、524 个用例，全部离线。",
+      api:["test_types_contract（I1/I2/I3 + 金标准 JSON 往返）","test_transform_roundtrip（合成 3D→像素→射线→3D < 1cm）","test_projection_modes（高地差 4m / 撞墙必须标遮挡）","test_kalman_gates（q 不许拒掉自己的有效观测）","test_arbiter_hysteresis / test_pipeline_replay / test_degradation_modes"],
+      config:["—"],
+      warn:["无需相机、无需权重、无需 GPU：这是四家开源方案共同的空白处。"]},
+    runner:{path:"tools/replay_runner.py",role:"离线回放：一份回放目录 → 一帧帧对外输出。",
+      api:["--frames / --config / --out / --threaded / --no-pace","check_contract(frames) → 违规描述列表","summarise() → 状态阶梯"],
+      config:["io.frame_source = replay","io.replay_path"],
+      warn:["退出码 0/1/2：契约违规必须让 CI 红掉，不能只打印一行。","跨帧 I3 只有这里能查——RobotSlotOutput.validate() 结构上看不到上一帧。"]},
+    fixture:{path:"tests/fixtures/replay_seq_001/",role:"合成回放夹具：检测结果是造的，投影链是真跑的。",
+      api:["manifest.json（96 帧 / dt 0.05 / 自带标定）","cascade.jsonl（每帧检测）","truth.jsonl（真值，ReplayFrameSource 不读，测试用）"],
+      config:["—"],
+      warn:["B3 全程可见；B1 第 25 帧丢失（走完 HOLD→BLIND→MISSING）；R2 第 31 帧出现。"]}
+  };
+
+  var panel = document.getElementById('panel');
+  var chips = document.querySelectorAll('.chip');
+
+  function render(key){
+    var d = DETAIL[key];
+    if(!d){ return; }
+    var h = '<h2>' + key + '</h2><div class="path mono">' + d.path + '</div>';
+    h += '<dl><dt>职责</dt><dd>' + d.role + '</dd>';
+    if(d.api && d.api.length){
+      h += '<dt>关键 API</dt><dd><ul>';
+      for(var i=0;i<d.api.length;i++){ h += '<li class="mono">' + d.api[i] + '</li>'; }
+      h += '</ul></dd>';
+    }
+    if(d.config && d.config.length){
+      h += '<dt>配置键</dt><dd><ul>';
+      for(var j=0;j<d.config.length;j++){ h += '<li class="mono">' + d.config[j] + '</li>'; }
+      h += '</ul></dd>';
+    }
+    if(d.warn && d.warn.length){
+      h += '<dt>代码里明确警告过的失效模式</dt><dd><ul>';
+      for(var k=0;k<d.warn.length;k++){ h += '<li>' + d.warn[k] + '</li>'; }
+      h += '</ul></dd>';
+    }
+    h += '</dl>';
+    panel.innerHTML = h;
+  }
+
+  for(var i=0;i<chips.length;i++){
+    chips[i].addEventListener('click', function(){
+      for(var j=0;j<chips.length;j++){ chips[j].classList.remove('active'); }
+      this.classList.add('active');
+      render(this.getAttribute('data-k'));
+      if(window.innerWidth <= 1080){ panel.scrollIntoView({behavior:'smooth', block:'start'}); }
+    });
+  }
+
+  var btnD = document.getElementById('btnDetail');
+  btnD.addEventListener('click', function(){
+    document.body.classList.toggle('detail');
+    var on = document.body.classList.contains('detail');
+    btnD.classList.toggle('on', on);
+    btnD.textContent = on ? '隐藏细节' : '显示细节';
+  });
+
+  var btnT = document.getElementById('btnTheme');
+  btnT.addEventListener('click', function(){
+    document.body.classList.toggle('light');
+    btnT.textContent = document.body.classList.contains('light') ? '切换深色' : '切换主题';
+  });
+
+  // 默认选中一个最能代表设计的模块
+  var first = document.querySelector('.chip[data-k="arbiter"]');
+  if(first){ first.classList.add('active'); render('arbiter'); }
+})();
+</script>
+</body>
+</html>

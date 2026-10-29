@@ -1,0 +1,80 @@
+# EGA ONNX 车辆/装甲检测 + MobileNet 数字分类（需 infer-digit 依赖）。
+# 通用车辆 item 由同车装甲 red/blue 和数字组合为 R/B 身份；Q/灰色不生成身份。
+# roi_batch 控制独立 ROI 的批大小，不改变单张模型输入分辨率。
+# 视频使用自身随附标定；这些内外参不能用于你的实拍安装位置。
+schema_version: jg.radar.robot.v1
+camera:
+  name: ega_replay_sample
+  width: 4024
+  height: 3036
+  fps: 30.0
+  K:
+  - - 3299.5283562470486
+    - 0.0
+    - 2024.0633490912842
+  - - 0.0
+    - 3300.8856957717744
+    - 1609.1450726022888
+  - - 0.0
+    - 0.0
+    - 1.0
+  dist:
+  - -0.05807251648330305
+  - 0.09529462517050756
+  - 0.0009502938218398292
+  - -0.0011825558881310113
+  - -0.05244493648124302
+transform:
+  R:
+  - - 0.04860772351941378
+    - -0.9980939196819032
+    - 0.03802389654250238
+  - - -0.34916242583286533
+    - -0.05264681765647927
+    - -0.9355821251911317
+  - - 0.9358006676642036
+    - 0.03220000131459799
+    - -0.3510559361619894
+  t:
+  - 651.09484268
+  - 368.57515705
+  - 192.65947889
+  projection_mode: ground_plane
+  lookup_map_path: ''
+field:
+  ground_plane_z: 0.0
+detect:
+  backend: onnx
+  car_model: /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/car/best.onnx
+  armor_model: /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/armor/armor_best.onnx
+  digit_model: /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/MobileNetv2.2.pth
+  car_img_size: 1280
+  armor_img_size: 192
+  digit_img_size: 64
+  car_conf: 0.3
+  armor_conf: 0.4
+  digit_conf: 0.5
+  iou: 0.45
+  max_det: 10
+  roi_batch: 16
+  min_box_px: 4.0
+  car_classes:
+    0: item
+  armor_classes:
+    0: dead
+    1: red
+    2: blue
+  digit_backend: mobilenet
+  digit_classes:
+    0: '1'
+    1: '2'
+    2: '3'
+    3: '4'
+    4: '7'
+    5: Q
+io:
+  frame_source: video
+  video_path: /home/meko/桌面/EGA_Radar_Replay(2)/replay_sample/camera/camera_record.mp4
+  video_timestamps: ''
+pipeline:
+  max_commit_age_s: 0.15

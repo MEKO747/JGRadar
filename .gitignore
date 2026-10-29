@@ -1,0 +1,31 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+
+# ---- 测试 / 覆盖率产物 ----
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# ---- 运行与导出产物（体积大，不入库）----
+out/
+MvSdkLog/
+
+# ---- 本机工具 / 沙箱留下的状态目录 ----
+# 2026-10-17 19:23 Codex 桌面版初始化受管沙箱时在项目根留下了这些空占位目录
+.agents/
+.aws/
+.codex/
+.commandcode/
+
+# ---- 杂项 ----
+*.ses

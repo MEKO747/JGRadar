@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JGRadar · EGA 完整录像验证</title>
+<style>
+body{margin:0;background:#11161e;color:#ecf1f8;font:15px system-ui,sans-serif}main{max-width:1600px;margin:auto;padding:18px}h1{font-size:21px;margin:0 0 8px}.sub{color:#adb9ca;line-height:1.7}.bar{height:6px;background:#263247;margin:12px 0}#fill{height:100%;width:0;background:#5cdac4}img,video{display:block;width:100%;background:#171d27;min-height:150px}#status{font-size:17px;margin:12px 0}.legend{display:flex;gap:20px;flex-wrap:wrap;margin:12px 0;font-size:14px}.green{color:#78e58d}.red{color:#ff9297}.blue{color:#81c8ff}.yellow{color:#f4d579}a{color:#87d6ff}button{background:#264460;color:white;border:1px solid #467697;border-radius:6px;padding:9px 16px;cursor:pointer}pre{white-space:pre-wrap;max-height:300px;overflow:auto}#completed{display:none}#error{color:#ff9297}
+</style><main>
+<h1>JGRadar · EGA 完整录像验证</h1>
+<div class="sub">逐帧运行：车辆候选 → 装甲板 → 数字 → 投影 → 跟踪 → 最终发布。保留录像采集时间戳；右图使用平地投影。<br>这是录像验证，无法验证现场 USB 取流；没有人工真值，不把检出次数当作准确率。</div>
+<div class="bar"><div id="fill"></div></div><div id="status">正在准备模型和标定…</div>
+<img id="live" alt="完整算法实时可视化"><div id="error"></div>
+<div class="legend"><span class="green">绿框：候选车，尚不代表已确认</span><span class="red">R：红方</span><span class="blue">B：蓝方</span><span class="yellow">虚线 / ~ / 空心点：预测位置</span><span>T：跟踪号；右侧表格：正式发布结果</span></div>
+<div id="completed"><button id="play">播放已完成的全部标注录像</button> <a href="annotated.mp4" download>下载完整视频</a> · <a href="frames.jsonl" download>逐帧记录</a> · <a href="summary.json">验证统计</a><video id="movie" controls style="display:none" preload="metadata"></video></div>
+<details><summary>当前 12 个身份状态</summary><pre id="slots"></pre></details>
+</main><script>
+let finished=false,hasImage=false;
+const img=document.getElementById('live');
+async function update(){try{
+ const s=await fetch('status.json?t='+Date.now(),{cache:'no-store'}).then(r=>r.json());
+ const n=s.frames||0,total=s.total_frames||s.expected_frames||17028;
+ document.getElementById('fill').style.width=(100*n/total)+'%';
+ const text={loading:'正在加载模型',running:'正在逐帧验证',complete:'全片验证完成',error:'验证中断，保留已处理结果',cancelled:'已停止，保留已处理结果'}[s.status]||s.status;
+ document.getElementById('status').textContent=`${text} · ${n.toLocaleString()} / ${total.toLocaleString()} 帧 · ${(100*n/total).toFixed(1)}%`+(s.processing_fps?` · 处理速度 ${s.processing_fps} 帧/秒`:'');
+ if(s.per_slot)document.getElementById('slots').textContent=Object.entries(s.per_slot).map(([name,v])=>`${name}  ${v.state.padEnd(18)} ${v.position_cm?`(${v.position_cm.map(x=>(x/100).toFixed(2)).join(', ')}) m`:'无坐标'}  T${v.track_id||'-'}`).join('\n');
+ if(s.error)document.getElementById('error').textContent=s.error;
+ if(n&&!hasImage){hasImage=true;img.src='live.jpg?t='+Date.now()}
+ if(['complete','error','cancelled'].includes(s.status)){finished=true;img.src='live.jpg?t='+Date.now();document.getElementById('completed').style.display='block'}
+ }catch(e){} if(!finished)setTimeout(update,1000)}
+img.onload=()=>{if(!finished)setTimeout(()=>{img.src='live.jpg?t='+Date.now()},100)};
+img.onerror=()=>{if(!finished)setTimeout(()=>{img.src='live.jpg?t='+Date.now()},1000)};
+document.getElementById('play').onclick=()=>{img.style.display='none';let v=document.getElementById('movie');v.style.display='block';v.src='annotated.mp4';v.play()};update();
+</script></html>

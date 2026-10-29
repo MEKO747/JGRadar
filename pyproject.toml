@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jg-radar"
+version = "0.1.0"
+description = "RoboMaster 雷达站视觉算法核心（不含相机驱动/串口/UI）"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "PyYAML>=6.0",
+    "opencv-python>=4.8",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+# 仅离线标定/网格处理使用；运行时零 3D 库依赖（走预计算查找表）
+offline = ["open3d>=0.18"]
+# 推理后端，按需装一个
+infer-trt = ["tensorrt", "torch", "ultralytics"]
+infer-onnx = ["onnxruntime"]
+infer-digit = ["torch", "torchvision", "Pillow"]
+# CUDA 12 / cuDNN 9；与 CPU extra 二选一。1.27 起默认 GPU 包改用 CUDA 13。
+infer-onnx-gpu = ["onnxruntime-gpu>=1.21,<1.27"]
+dev = ["pytest>=7.4", "pytest-cov"]
+
+[tool.setuptools.packages.find]
+include = ["jg_radar*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gpu: 需要 GPU 的测试（默认跳过：-m 'not gpu'）",
+    "offline3d: 需要 open3d 的测试（默认跳过）",
+]

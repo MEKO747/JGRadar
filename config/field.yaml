@@ -1,0 +1,26 @@
+# 场地网格与坐标系。
+#
+# 网格来源优先级：
+#   1) 现成三角化 PLY（TCR / EGA 仓库附带）——M2 先用它跑通链路
+#   2) STP → 网格（tools/stp_to_mesh.py）——精度升级项，不阻塞
+#
+# mesh_to_field 是 4×4 刚体变换，把网格坐标搬到场地坐标（cm）。
+# CAD 原点任意，必须用 tools/validate_alignment.py 求解并验证：
+#   反投影 RMS < 3px 且 往返误差 < 2cm，否则拒绝启动。
+
+field:
+  mesh_path: ""                 # 例：field/RMUC2026.ply
+  unit_scale: 1.0               # 网格单位 → cm
+  ground_plane_z: 0.0
+  keypoints_path: ""            # 例：field/keypoints.json
+  size_x_cm: 2800
+  size_y_cm: 1500
+  # 上报协议 0x0305 覆盖每方 6 个角色
+  roles: ["1", "2", "3", "4", "6", "7"]
+  sides: ["R", "B"]
+  # 网格坐标 → 场地坐标（cm）。标定前为单位阵。
+  mesh_to_field:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]

@@ -1,0 +1,645 @@
+[
+  {
+    "frame_seq": 0,
+    "captured_at": 100.0,
+    "published_at": 100.021,
+    "robots": {
+      "R1": {
+        "name": "R1",
+        "position_cm": [
+          1200,
+          700
+        ],
+        "state": "measured",
+        "confidence": 0.91,
+        "observed_at": 100.0,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": 1,
+        "position_std_cm": 3.2,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R2": {
+        "name": "R2",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.0,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R3": {
+        "name": "R3",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.0,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R4": {
+        "name": "R4",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.0,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R6": {
+        "name": "R6",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.0,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R7": {
+        "name": "R7",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.0,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B1": {
+        "name": "B1",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.0,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B2": {
+        "name": "B2",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.0,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B3": {
+        "name": "B3",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.0,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B4": {
+        "name": "B4",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.0,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B6": {
+        "name": "B6",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.0,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B7": {
+        "name": "B7",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.0,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      }
+    },
+    "diagnostics": {
+      "fps_ema": 20.0
+    }
+  },
+  {
+    "frame_seq": 1,
+    "captured_at": 100.05,
+    "published_at": 100.071,
+    "robots": {
+      "R1": {
+        "name": "R1",
+        "position_cm": [
+          1213,
+          704
+        ],
+        "state": "measured",
+        "confidence": 0.93,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": 1,
+        "position_std_cm": 2.9,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R2": {
+        "name": "R2",
+        "position_cm": [
+          860,
+          402
+        ],
+        "state": "measured",
+        "confidence": 0.77,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": 2,
+        "position_std_cm": 4.1,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R3": {
+        "name": "R3",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R4": {
+        "name": "R4",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R6": {
+        "name": "R6",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R7": {
+        "name": "R7",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B1": {
+        "name": "B1",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B2": {
+        "name": "B2",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B3": {
+        "name": "B3",
+        "position_cm": [
+          2100,
+          1180
+        ],
+        "state": "measured",
+        "confidence": 0.64,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": 3,
+        "position_std_cm": 6.8,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B4": {
+        "name": "B4",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B6": {
+        "name": "B6",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B7": {
+        "name": "B7",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      }
+    },
+    "diagnostics": {
+      "fps_ema": 20.1
+    }
+  },
+  {
+    "frame_seq": 2,
+    "captured_at": 100.1,
+    "published_at": 100.122,
+    "robots": {
+      "R1": {
+        "name": "R1",
+        "position_cm": [
+          1226,
+          708
+        ],
+        "state": "occlusion_hold",
+        "confidence": 0.93,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": true,
+        "track_id": 1,
+        "position_std_cm": 7.5,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R2": {
+        "name": "R2",
+        "position_cm": [
+          874,
+          409
+        ],
+        "state": "measured",
+        "confidence": 0.81,
+        "observed_at": 100.1,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": 2,
+        "position_std_cm": 3.9,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R3": {
+        "name": "R3",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.1,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R4": {
+        "name": "R4",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.1,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R6": {
+        "name": "R6",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.1,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R7": {
+        "name": "R7",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.1,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B1": {
+        "name": "B1",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.1,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B2": {
+        "name": "B2",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.1,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B3": {
+        "name": "B3",
+        "position_cm": [
+          2180,
+          1240
+        ],
+        "state": "blind_prediction",
+        "confidence": 0.64,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": true,
+        "track_id": 3,
+        "position_std_cm": 45.0,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B4": {
+        "name": "B4",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.1,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B6": {
+        "name": "B6",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.1,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B7": {
+        "name": "B7",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.1,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      }
+    },
+    "diagnostics": {
+      "fps_ema": 19.9
+    }
+  },
+  {
+    "frame_seq": 3,
+    "captured_at": 100.15,
+    "published_at": 100.171,
+    "robots": {
+      "R1": {
+        "name": "R1",
+        "position_cm": [
+          1240,
+          713
+        ],
+        "state": "measured",
+        "confidence": 0.9,
+        "observed_at": 100.15,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": 1,
+        "position_std_cm": 3.0,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R2": {
+        "name": "R2",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.15,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": 2,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R3": {
+        "name": "R3",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.15,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R4": {
+        "name": "R4",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.15,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R6": {
+        "name": "R6",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.15,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "R7": {
+        "name": "R7",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.15,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B1": {
+        "name": "B1",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.15,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B2": {
+        "name": "B2",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.15,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B3": {
+        "name": "B3",
+        "position_cm": [
+          2200,
+          1260
+        ],
+        "state": "blind_prediction",
+        "confidence": 0.6,
+        "observed_at": 100.05,
+        "source": "vision",
+        "is_predicted": true,
+        "track_id": 3,
+        "position_std_cm": 52.0,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B4": {
+        "name": "B4",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.15,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B6": {
+        "name": "B6",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.15,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      },
+      "B7": {
+        "name": "B7",
+        "position_cm": null,
+        "state": "missing",
+        "confidence": 0.0,
+        "observed_at": 100.15,
+        "source": "vision",
+        "is_predicted": false,
+        "track_id": null,
+        "position_std_cm": null,
+        "schema_version": "jg.radar.robot.v1"
+      }
+    },
+    "diagnostics": {
+      "fps_ema": 20.0
+    }
+  }
+]

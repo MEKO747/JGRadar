@@ -1,0 +1,35 @@
+# 相机内参与采集参数。
+#
+# 相机尚未选型，当前值是方案 §十 的推荐占位：
+#   1200 万像素全局快门（4024×3036, 3.45µm）+ 12mm 镜头
+#   fx = fy ≈ 12mm / 3.45µm = 3478 px，主点取图像中心
+# 选型确定后必须用张氏棋盘重标，并回写真实 K / dist。
+# 回写时保留本文件注释（参考 Radar26 callibrate_helper.py 的做法）。
+
+camera:
+  name: unselected
+  width: 4024
+  height: 3036
+  fps: 20.0
+  pixel_format: BayerRG8
+  K:
+    - [3478.0, 0.0, 2012.0]
+    - [0.0, 3478.0, 1518.0]
+    - [0.0, 0.0, 1.0]
+  # OpenCV 顺序：k1 k2 p1 p2 k3
+  dist: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+transform:
+  # 外参：场地(cm) → 相机。标定前为单位阵。
+  # 用 tools/calibrate_extrinsics.py 求解（≥6 组世界↔像素对应点）。
+  R:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  t: [0.0, 0.0, 0.0]
+  projection_mode: ground_plane   # ground_plane | mesh
+  lookup_map_path: ""             # 预计算像素→世界查找表（.npz）
+  reproj_rms_max_px: 3.0
+  reproj_max_px: 8.0
+  roundtrip_max_cm: 2.0
+  reproj_rms_px: null             # 标定实测值，回填后作为变换噪声下限

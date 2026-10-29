@@ -1,0 +1,30 @@
+# EGA ONNX 车辆/装甲检测 + MobileNet 数字分类（需 infer-digit 依赖）。
+# 通用车辆 item 由同车装甲 red/blue 和数字组合为 R/B 身份；Q/灰色不生成身份。
+# roi_batch 控制独立 ROI 的批大小，不改变单张模型输入分辨率。
+# 实拍检测预览不运行跟踪/定位/融合；数字分类输出不是全链路验收。
+detect:
+  backend: onnx
+  car_model: /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/car/best.onnx
+  armor_model: /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/armor/armor_best.onnx
+  digit_model: /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/MobileNetv2.2.pth
+  car_img_size: 1280
+  armor_img_size: 192
+  car_conf: 0.3
+  armor_conf: 0.4
+  max_det: 10
+  roi_batch: 16
+  car_classes:
+    0: item
+  armor_classes:
+    0: dead
+    1: red
+    2: blue
+  digit_backend: mobilenet
+  digit_img_size: 64
+  digit_classes:
+    0: '1'
+    1: '2'
+    2: '3'
+    3: '4'
+    4: '7'
+    5: Q

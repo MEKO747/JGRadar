@@ -1,0 +1,166 @@
+# JGRadar 主配置。
+# 与 camera.yaml / field.yaml 叠加使用：后加载的覆盖先加载的，映射递归合并。
+#   load_config("config/default.yaml", "config/camera.yaml", "config/field.yaml")
+#
+# 约定：凡是"阈值"类的数字，都必须能从 tools/measure_noise.py 的实测结果推出来。
+# 拍脑袋填的数会在 test_noise_characterization 里被拦下来。
+
+schema_version: jg.radar.robot.v1
+
+detect:
+  backend: stub          # stub | empty | onnx（trt/torch 未实现，配了会拒绝启动）
+  car_model: ""
+  armor_model: ""
+  digit_model: ""
+  car_img_size: 1280
+  armor_img_size: 192
+  digit_img_size: 48
+  car_conf: 0.35
+  armor_conf: 0.4
+  digit_conf: 0.5
+  iou: 0.45
+  max_det: 32
+  roi_batch: 16          # 一张画布拼多少块 ROI，折算成 ceil(sqrt(n)) 的方阵
+  min_box_px: 4.0        # 映射回原图后短边小于它的框丢弃
+
+  # ---- 类别表：换一份权重只改这三行，不动代码 ----
+  #
+  # 键 = **后端输出的 class_id**，值 = 语义标签。表里没有的 id 整级丢弃，
+  # 所以这张表同时是翻译表和过滤器。留空 {} 表示该级不过滤。
+  #
+  # 三家的约定互不相同，照抄任何一家都是在赌自己手里是哪份权重：
+  #   EGA    0–14 的颜色编码
+  #   shark  直接给 B1–B5 / R1–R5 这类槽位名
+  #   TCR    15 类
+  # 下面按 shark 风格举例，用之前必须对着权重自己的 names 核对一遍。
+  #
+  # ⚠️ 三张表都是**封闭集合**：叠加配置（如 config/ega_replay.yaml）里一旦
+  # 写出某一级，写的就是**全集**，不与这里逐键合并。因为它们是白名单——
+  # 少写一个键不是"这一项保持默认"，而是"这一项**仍然被接受**"。
+  # 要在这张表之上追加，写成 `car_classes+:`；要清空（=该级不过滤）写 `{}`。
+  car_classes:
+    0: B1
+    1: B2
+    2: B3
+    3: B4
+    4: B5
+    5: R1
+    6: R2
+    7: R3
+    8: R4
+    9: R5
+  armor_classes: {}      # 装甲板级通常只关心"是不是装甲板"，留空即不过滤
+  digit_classes:         # 数字分类器的输出类别，按 ARMOR 数字集
+    0: "1"
+    1: "2"
+    2: "3"
+    3: "4"
+    4: "5"
+    5: "S"
+    6: "Q"
+
+track:
+  # 双闸门：原始观测跳变门 + 预测残差门。默认值仅为占位，
+  # 必须由 measure_noise.py 实测后回填（阈值 ≥ 3σ）。
+  raw_jump_px: 120.0
+  process_noise_cm2: 900.0
+  measurement_noise_cm2: 25.0
+  min_hits: 2           # 新轨迹连续命中几次才确认上报（一帧假检测只活一帧）
+  lost_predict_s: 0.8
+  ttl_s: 3.0
+  reacquire_hits: 2     # 从盲区恢复要连续命中几次（单帧假检测不该拽回一条轨迹）
+  max_cost: 1.2
+  gate_chi2: 9.49       # χ² 95%, 4 自由度
+
+  # 图像域滤波器噪声（px²）。与上面两个 cm² 的**量纲不同**，别互相套用：
+  # 远处 1px 是几十厘米，近处 1px 只有几厘米。
+  #
+  # box_process_noise_px2 按**跟踪指数** Λ = √(q·dt³/R) 定，取 Λ = 1：
+  #   q = Λ²·R/dt³ = 1 × 9 / 0.05³ = 7.2e4
+  # Λ 是无量纲的，所以这个定法跨距离、跨分辨率都成立——像素域的过程噪声和
+  # 测量噪声随距离一起缩放，只有两者的**比值**决定滤波器行为。拿单张画幅去
+  # 调 q 是没有意义的。Λ = 1 是"滞后"与"跟得住"两个区间的分界，本身不是
+  # 拟出来的数：它等于"一帧之内过程噪声的注入量与测量噪声相当"。
+  #
+  # 定这个值的判据是：**滤波器不许把自己那条有效观测拒掉。** 无噪声的恒加速
+  # 目标下，χ² 里的残差全是系统性滞后造成的，它必须留在 gate_chi2(9.49) 以内。
+  # 实测（20fps，R=9px²，11m 处 1px≈1.27cm）：
+  #   q = 4      a=30px/s² 时 χ²=51    —— 拒；而且滤波后 σ 反而比原始测量大 2.5 倍
+  #   q = 64     a=30px/s² 时 χ²=15    —— 拒（这个值能把 fixture 跑得很干净）
+  #   q = 18000  a=395px/s² 时 χ²=9.7  —— 刚好拒，不如不要
+  #   q = 7.2e4  a=395px/s² 时 χ²≈2    —— 留了 4 倍余量
+  # 其中 a=395px/s² 就是 5 m/s²（机器人横向机动的量级）。
+  #
+  # **别拿回放 fixture 去调这个值。** fixture 里的正弦机动只有约 0.3 m/s²，
+  # q≈64 就能跑得很干净；但那是"轨迹好跟"，不是"参数调对了"。真实机器人横向
+  # 加速度是 5 m/s² 量级，按 fixture 调出来的值到实车上会这样失效：
+  #   滤波器过度相信自己的速度 → 观测量每帧只被修正约 8% → 状态卡在离真值
+  #   9px 处（而观测每帧都在喂它）→ 协方差同时越收越紧 → χ² 门把**自己的
+  #   有效观测**拒掉 → 轨迹永久分叉；幽灵的累计命中数还占优，对外一直报
+  #   HOLD/BLIND，而目标每一帧都看得见。
+  # 这条链在回放里被完整复现过（B3 连续可见、却在第 48 帧断轨），
+  # 回归测试在 tests/test_kalman_gates.py::test_the_box_filter_never_rejects_its_own_valid_measurements。
+  #
+  # M7 拿到真实机动数据后要复核 Λ，但它**不可能**由 measure_noise.py 的静态
+  # 序列测出：静态目标给的是测量噪声 R，过程噪声 Q 由目标机动决定，两者无关。
+  box_process_noise_px2: 72000.0
+  box_measurement_noise_px2: 9.0
+
+  # 代价里距离项的衰减尺度
+  assoc_center_scale_px: 120.0
+  assoc_world_scale_cm: 300.0
+
+  # 身份是慢变量：票权按半衰期衰减，否则身份会锁死在早期的一个错误结论上
+  identity_half_life_s: 2.0
+  identity_switch_margin: 0.15   # 挑战者要超出在职者这么多才允许改标签（防横跳）
+  confidence_half_life_s: 1.0
+  min_identity_share: 0.5   # 最高票占比低于此值视为身份未定，不上报
+
+  # 盲区航点。**没有候选就判 MISSING**，不用恒速外推去编一个 3 秒后的位置。
+  # 下面按场地布局给了几个占位点，实际部署时应按战术需要细化。
+  blind_speed_cos_weight: 1.0
+  blind_distance_decay_cm: 400.0
+  blind_min_dwell_s: 0.5
+  blind_revisit_penalty: 0.3
+  blind_waypoints:
+    - [red_base, 280, 750]
+    - [blue_base, 2520, 750]
+    - [highland, 1400, 750]
+    - [red_highland, 700, 750]
+    - [blue_highland, 2100, 750]
+
+fuse:
+  # 从高到低。无线电接进来时只改这一行都不需要——视觉侧零改动。
+  priority:
+    - radio_fresh
+    - vision_measured
+    - radio_stale
+    - vision_occlusion_hold
+    - vision_blind
+  radio_fresh_s: 0.2
+  radio_stale_s: 10.0
+  vision_watchdog_s: 0.5
+  dwell_s: 0.3
+  switch_jump_cm: 150.0
+  reacquire_s: 0.8
+  # 第二条轴：哪个坐标更准，而不是"哪一种证据"。比值 500/500 = 1.0s
+  # 就是实测坐标的保质期——比它更旧的位置，宁可不报。
+  max_robot_speed_cm_s: 500.0
+  max_position_error_cm: 500.0
+
+pipeline:
+  max_commit_age_s: 0.15   # 帧龄超限则丢弃，绝不发旧数据
+  mailbox_size: 2
+  calibration_epoch: 0
+
+io:
+  frame_source: synthetic  # synthetic | replay | camera
+  replay_path: ""
+  sink_path: ""
+  camera_width: 0   # 0 = 相机默认分辨率；USB 2.0 链路可先试 640
+  camera_height: 0
+
+diagnostics:
+  ema_alpha: 0.1
+  jsonl_path: ""
+  overlay_every_n_frames: 30
