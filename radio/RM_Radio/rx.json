@@ -1,0 +1,10 @@
+{
+  "uri": "ip:192.168.2.1",
+  "expected_serial": "104473023196000bf5ff1a00aae12c3ca8",
+  "gain_mode": "manual",
+  "gain": 40,
+  "teams": {
+    "red": {"lo_frequency": 432600000, "info_offset": 600000, "noise_offsets": [-400000, -100000]},
+    "blue": {"lo_frequency": 434520000, "info_offset": -600000, "noise_offsets": [400000, 100000]}
+  }
+}
