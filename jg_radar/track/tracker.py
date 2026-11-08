@@ -32,6 +32,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
+import math
 from typing import Iterable, Sequence
 
 import numpy as np
@@ -45,14 +47,26 @@ from jg_radar.track.association import (
     same_label_matrix,
 )
 from jg_radar.track.blind import Waypoint, choose_waypoint, parse_waypoints
-from jg_radar.track.identity import IdentityVote, corroborated_votes
+from jg_radar.track.identity import IdentityVote, armor_votes, corroborated_votes
 from jg_radar.track.state_machine import StateThresholds, resolve_state
 from jg_radar.track.types import Track, TrackObservation, TrackStatus
-from jg_radar.types import RobotSlotOutput, RobotState, default_slot_names
+from jg_radar.types import RobotSlotOutput, RobotState, default_slot_names, missing_slot
 
 __all__ = ["MultiTracker"]
 
 _NAN = float("nan")
+
+
+@dataclass
+class _SlotMemory:
+    owner_id: int
+    trusted: RobotSlotOutput
+    challenger_id: int | None = None
+    challenger_since: float = 0.0
+    challenger_position: tuple[int, int] | None = None
+    challenger_evidence_count: int = 0
+    challenger_evidence_at: float = float('-inf')
+    withdrawn: bool = False
 
 
 class MultiTracker:
@@ -75,6 +89,8 @@ class MultiTracker:
         self._tracks: list[Track] = []
         self._next_id = 1
         self._dropped_no_world = 0
+        self._owners: dict[str, _SlotMemory] = {}
+        self._conflicts = 0
         self.last_diagnostics: dict[str, float] = {}
 
     # -- 只读视图 ---------------------------------------------------------
@@ -110,6 +126,10 @@ class MultiTracker:
             if j not in matched_dets:
                 self._spawn(o, now)
 
+        for track in self._tracks:
+            self._refresh_identity(track, now)
+
+        self._conflicts = 0
         outputs = self._publish(now)
         self._reap(now)
 
@@ -119,6 +139,7 @@ class MultiTracker:
             "observations": float(len(obs)),
             "reported": float(len(outputs)),
             "dropped_no_world": float(self._dropped_no_world),
+            "identity_conflicts": float(self._conflicts),
         }
         return outputs
 
@@ -166,7 +187,7 @@ class MultiTracker:
             if t.box is None:
                 continue
             for j, o in enumerate(obs):
-                chi2[i, j] = t.box.mahalanobis_bbox(o.bbox)
+                chi2[i, j] = t.box.mahalanobis_center(o.bbox)
 
         same = same_label_matrix(
             [t.label for t in tracks], [o.car_class for o in obs]
@@ -179,12 +200,33 @@ class MultiTracker:
             chi2_max=float(cfg.gate_chi2),
         )
 
+        # 框向上扩张时中心会跟着人移动，底边中点却可能仍贴着车辆。
+        # 只有旧框与新框高度包含、底边接近且原始中心跳变仍在限内，才补回配对；
+        # 最终仍交给全局匹配和代价门，不把“同槽位”当成强制关联。
+        for i, track in enumerate(tracks):
+            if track.last_bbox is None:
+                continue
+            ax1, ay1, ax2, ay2 = track.last_bbox
+            area_a = max(ax2 - ax1, 0.0) * max(ay2 - ay1, 0.0)
+            for j, detection in enumerate(obs):
+                bx1, by1, bx2, by2 = detection.bbox
+                area_b = max(bx2 - bx1, 0.0) * max(by2 - by1, 0.0)
+                overlap = max(0.0, min(ax2, bx2) - max(ax1, bx1)) * max(0.0, min(ay2, by2) - max(ay1, by1))
+                bottom = math.hypot((ax1 + ax2 - bx1 - bx2) / 2.0, ay2 - by2)
+                tolerance = max(8.0, min(30.0, 0.15 * min(ax2 - ax1, bx2 - bx1)))
+                if (min(area_a, area_b) > 0 and overlap / min(area_a, area_b) >= 0.7
+                        and bottom <= tolerance and raw[i, j] <= float(cfg.raw_jump_px)
+                        and (same is None or same[i, j])):
+                    allowed[i, j] = True
+
         track_world = self._world_array(tracks)
         det_world = self._world_array(obs)
         cost = build_cost_matrix(
             track_boxes,
             det_boxes,
             allowed=allowed,
+            w_iou=0.6,
+            w_center=1.0,
             track_world=track_world,
             det_world=det_world,
             w_world=0.0 if track_world is None else 0.5,
@@ -243,10 +285,18 @@ class MultiTracker:
         )
         if confirmed:
             track.reacquiring = False
-        track.identity.add_votes(
-            corroborated_votes(obs.car_class, obs.digit),
-            now=now,
-        )
+        if obs.direct_identity or not obs.armor_evidence:
+            votes = corroborated_votes(obs.car_class, obs.digit)
+        else:
+            votes = armor_votes(obs.armor_evidence)
+        track.identity.decay_to(now)
+        track.identity.add_votes(votes, now=now)
+        for vote in votes:
+            if vote.label not in self.slot_names:
+                continue
+            track.identity_last_seen[vote.label] = float(now)
+            old = track.identity_quality.get(vote.label, vote.weight)
+            track.identity_quality[vote.label] = 0.7 * old + 0.3 * min(vote.weight, 1.0)
         self._refresh_identity(track, now)
 
     def _spawn(self, obs: TrackObservation, now: float) -> Track:
@@ -268,13 +318,16 @@ class MultiTracker:
 
         票箱空时标签置空——**身份不明的轨迹不该带着上一个标签继续跑**。
         """
+        track.identity.decay_to(now)
         best = track.identity.best
         if best is None:
             track.label = ""
             return
         label, _weight = best
         share = track.identity.share(label)
-        track.label = label if share >= float(getattr(self.cfg, "min_identity_share", 0.5)) else ""
+        age = now - track.identity_last_seen.get(label, float("-inf"))
+        track.label = label if (share >= float(getattr(self.cfg, "min_identity_share", 0.5))
+                                and age <= float(self.cfg.identity_evidence_ttl_s)) else ""
 
     def _reap(self, now: float) -> None:
         """回收轨迹。
@@ -300,39 +353,127 @@ class MultiTracker:
     # -- 输出 -------------------------------------------------------------
     def _publish(self, now: float) -> dict[str, RobotSlotOutput]:
         out: dict[str, RobotSlotOutput] = {}
-        claims: dict[str, Track] = {}
+        claims: dict[str, list[Track]] = {}
         for track in self._tracks:
             if track.status not in (TrackStatus.CONFIRMED, TrackStatus.LOST):
-                # TENTATIVE：没攒够命中，候选而已，不上报。
-                # DEAD：本帧刚判死（未确认的轨迹一 miss 就死），更不该报——
-                #   它正是"一帧假检测"，报出去就等于把假检测认了下来。
                 continue
             name = track.label
             if name not in self.slot_names:
-                # 身份未定、或定到了一个不存在的槽位名：位置再有把握也不报。
+                continue
+            claims.setdefault(name, []).append(track)
+
+        # 已过期的身份必须明确撤回一次，不能让缓冲继续发布上一次的测量。
+        for name in list(self._owners):
+            if name not in claims:
+                memory = self._owners[name]
+                if not memory.withdrawn:
+                    out[name] = missing_slot(name, now)
+                    memory.withdrawn = True
+
+        for name, candidates in claims.items():
+            memory = self._owners.get(name)
+            if memory is not None:
+                memory.withdrawn = False
+            # 一个轨迹已经被更正为其他身份时，立即撤销旧槽位，不能保留旧标签。
+            owner = next((t for t in self._tracks if memory and t.track_id == memory.owner_id), None)
+            if owner is not None and owner.label and owner.label != name:
+                self._owners.pop(name, None)
+                memory = None
+                owner = None
+            def rank(t):
+                quality = t.identity_quality.get(name, 0.0) * t.identity.share(name)
+                return (t.matched, quality, t.hits, -t.track_id)
+            candidates.sort(key=rank, reverse=True)
+            chosen = candidates[0]
+            quality = lambda t: t.identity_quality.get(name, 0.0) * t.identity.share(name)
+            live = [t for t in candidates if t.matched]
+            margin = float(self.cfg.identity_conflict_margin)
+            ambiguous = (len(live) > 1 and quality(live[0]) - quality(live[1]) < margin
+                         and self._track_distance(live[0], live[1]) > float(self.cfg.identity_switch_jump_cm))
+            if memory is None:
+                if ambiguous:
+                    self._conflicts += 1
+                    continue
+                slot = self._slot(chosen, name, now)
+                if slot.state is RobotState.MEASURED:
+                    self._owners[name] = _SlotMemory(chosen.track_id, slot)
+                out[name] = slot
                 continue
 
-            rival = claims.get(name)
-            if rival is not None and not self._outranks(track, rival):
-                # 两条轨迹抢同一个槽位。谁后写谁赢的话，一条刚冒出来的假轨迹
-                # 就能把跟了十几帧的那条顶掉——必须按证据量裁决。
+            slot = self._slot(chosen, name, now)
+            age = max(0.0, now - memory.trusted.observed_at)
+            limit = float(self.cfg.identity_switch_jump_cm) + float(self.cfg.identity_max_speed_cm_s) * age
+            jump = (math.dist(slot.position_cm, memory.trusted.position_cm)
+                    if slot.position_cm is not None and memory.trusted.position_cm is not None else 0.0)
+            different = chosen.track_id != memory.owner_id
+            needs_check = ambiguous or (slot.state is RobotState.MEASURED and jump > limit)
+            if different and owner is not None and owner.matched and chosen.matched:
+                needs_check = True
+            if needs_check:
+                self._conflicts += 1
+                # 竞争者必须持续匹配、空间自洽、身份质量明显优于仍可见的现任。
+                can_challenge = chosen.matched and not ambiguous and (
+                    owner is None or not owner.matched or chosen is owner or
+                    quality(chosen) >= quality(owner) + margin)
+                if can_challenge and slot.position_cm is not None:
+                    if (memory.challenger_id != chosen.track_id or memory.challenger_position is None
+                            or math.dist(memory.challenger_position, slot.position_cm) > (
+                                float(self.cfg.identity_switch_jump_cm)
+                                + float(self.cfg.identity_max_speed_cm_s) * max(0.0, now - memory.challenger_since))):
+                        memory.challenger_id = chosen.track_id
+                        memory.challenger_since = now
+                        memory.challenger_position = slot.position_cm
+                        memory.challenger_evidence_count = 0
+                        memory.challenger_evidence_at = float('-inf')
+                    evidence_at = chosen.identity_last_seen.get(name, float('-inf'))
+                    if evidence_at == now and evidence_at > memory.challenger_evidence_at:
+                        memory.challenger_evidence_count += 1
+                        memory.challenger_evidence_at = evidence_at
+                    if (now - memory.challenger_since >= float(self.cfg.identity_challenge_s)
+                            and memory.challenger_evidence_count >= int(self.cfg.reacquire_hits)):
+                        memory.owner_id = chosen.track_id
+                        memory.trusted = slot
+                        memory.challenger_id = None
+                        out[name] = slot
+                        continue
+                else:
+                    memory.challenger_id = None
+                held = self._hold(memory.trusted, now)
+                if held is not None:
+                    out[name] = held
                 continue
-
-            state = self._resolve(track, now)
-            track.state = state
-            slot = track.to_slot_output(
-                name=name,
-                state=state,
-                now=now,
-                confidence_half_life_s=float(
-                    getattr(self.cfg, "confidence_half_life_s", 1.0)
-                ),
-            )
-            slot.validate()  # 坏数据不出进程
-
+            memory.challenger_id = None
+            memory.owner_id = chosen.track_id
+            if slot.state is RobotState.MEASURED:
+                memory.trusted = slot
             out[name] = slot
-            claims[name] = track
         return out
+
+    @staticmethod
+    def _track_distance(a: Track, b: Track) -> float:
+        if a.world is None or b.world is None:
+            return float("inf")
+        return math.dist(a.world.position_cm, b.world.position_cm)
+
+    def _slot(self, track: Track, name: str, now: float) -> RobotSlotOutput:
+        state = self._resolve(track, now)
+        track.state = state
+        slot = track.to_slot_output(name=name, state=state, now=now,
+                                    confidence_half_life_s=float(self.cfg.confidence_half_life_s))
+        slot.validate()
+        return slot
+
+    def _hold(self, trusted: RobotSlotOutput, now: float) -> RobotSlotOutput | None:
+        age = max(0.0, now - trusted.observed_at)
+        if age > float(self.cfg.lost_predict_s):
+            return None
+        std = math.hypot(trusted.position_std_cm or 0.0,
+                         float(self.cfg.identity_max_speed_cm_s) * age / 3.0)
+        result = replace(trusted, state=RobotState.OCCLUSION_HOLD, is_predicted=True,
+                         confidence=trusted.confidence * 0.5 ** (age / max(self.cfg.confidence_half_life_s, 1e-6)),
+                         position_std_cm=std, prediction_offset_cm=0.0)
+        result.validate()
+        return result
 
     @staticmethod
     def _outranks(candidate: Track, incumbent: Track) -> bool:
@@ -407,4 +548,5 @@ class MultiTracker:
         **轨迹 id 不重置**：回放两段序列时 id 撞车会让人以为是同一条轨迹。
         """
         self._tracks = []
+        self._owners.clear()
         self.last_diagnostics = {}

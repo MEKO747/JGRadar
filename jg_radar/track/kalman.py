@@ -216,6 +216,16 @@ class BoxKalman(_KalmanCV):
     def mahalanobis_bbox(self, bbox: tuple[float, float, float, float]) -> float:
         return self.mahalanobis_sq(self.to_state(bbox))
 
+    def mahalanobis_center(self, bbox: tuple[float, float, float, float]) -> float:
+        """只用中心判断运动残差，框突然变形不直接拒绝关联。"""
+        residual = self.to_state(bbox)[:2] - self.x[:2]
+        covariance = self.P[:2, :2] + np.eye(2) * self.r
+        try:
+            result = float(residual @ np.linalg.solve(covariance, residual))
+        except np.linalg.LinAlgError:
+            return float("inf")
+        return result if np.isfinite(result) and result >= 0 else float("inf")
+
     @property
     def bbox(self) -> tuple[float, float, float, float]:
         """当前框 ``x1,y1,x2,y2``（左上/右下，与原图同约定）。

@@ -248,6 +248,11 @@ class TrackConfig:
     """丢失期间置信度的半衰期。"""
     min_identity_share: float = 0.5
     """最高票占比低于它就认为身份未定，不上报。"""
+    identity_evidence_ttl_s: float = 2.0
+    identity_conflict_margin: float = 0.15
+    identity_challenge_s: float = 0.3
+    identity_switch_jump_cm: float = 150.0
+    identity_max_speed_cm_s: float = 500.0
     blind_speed_cos_weight: float = 1.0
     blind_distance_decay_cm: float = 400.0
     blind_min_dwell_s: float = 0.5

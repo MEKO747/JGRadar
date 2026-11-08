@@ -53,6 +53,18 @@ class TrackStatus(str, Enum):
 
 
 @dataclass(frozen=True)
+class ArmorEvidence:
+    """同一帧的一块装甲板；分数是模型输出，并非校准后的概率。"""
+    color: str
+    digit: str
+    armor_confidence: float
+    digit_confidence: float
+    width_px: float
+    height_px: float
+    observed_at: float
+
+
+@dataclass(frozen=True)
 class TrackObservation:
     """一帧里的一次观测。跟踪层的输入，与检测层解耦。
 
@@ -70,6 +82,8 @@ class TrackObservation:
     """装甲板数字读数，如 ``"1"``。只用于印证身份，指不出槽位。"""
     car_index: int | None = None
     """来自一级检测的下标，仅用于诊断与归因。"""
+    armor_evidence: tuple[ArmorEvidence, ...] = ()
+    direct_identity: bool = False
 
     @property
     def center(self) -> tuple[float, float]:
@@ -115,6 +129,8 @@ class Track:
     confidence: float = 0.0
     label: str = ""
     identity: IdentityVote = field(default_factory=IdentityVote)
+    identity_last_seen: dict[str, float] = field(default_factory=dict)
+    identity_quality: dict[str, float] = field(default_factory=dict)
 
     waypoint: Waypoint | None = None
     waypoint_since: float = float("-inf")

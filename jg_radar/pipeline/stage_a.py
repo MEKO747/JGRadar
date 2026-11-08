@@ -45,7 +45,7 @@ import numpy as np
 from jg_radar.detect.factory import CascadeResult
 from jg_radar.pipeline.mailbox import StageAPacket
 from jg_radar.pipeline.timings import Timings
-from jg_radar.track.types import TrackObservation
+from jg_radar.track.types import ArmorEvidence, TrackObservation
 from jg_radar.types import default_slot_names
 
 __all__ = ["StageA"]
@@ -91,7 +91,7 @@ class StageA:
         """把一帧转成一个冻结的包。"""
         with self.timings.measure("stage_a"):
             cascade = self._cascade_for(frame)
-            observations = self._observations(cascade)
+            observations = self._observations(cascade, observed_at=float(frame.captured_at))
         self.frames += 1
         # 包里只有 ``frame.captured_at`` 这一个时刻，包内所有观测都属于它。
         return StageAPacket(
@@ -117,7 +117,7 @@ class StageA:
         with self.timings.measure("detect"):
             return self.cascade.run(frame.image)
 
-    def _observations(self, cascade: CascadeResult) -> tuple[TrackObservation, ...]:
+    def _observations(self, cascade: CascadeResult, *, observed_at: float = 0.0) -> tuple[TrackObservation, ...]:
         if not cascade.cars:
             return ()
 
@@ -147,9 +147,28 @@ class StageA:
                     car_class=identity,
                     digit=self._digit_for(cascade, i),
                     car_index=i,
+                    armor_evidence=self._armor_evidence(cascade, i, observed_at),
+                    direct_identity=car.label in self.slot_names,
                 )
             )
         return tuple(out)
+
+    @staticmethod
+    def _armor_evidence(cascade: CascadeResult, car_index: int, observed_at: float):
+        result = []
+        for index, hit in enumerate(cascade.armors):
+            if hit.car_index != car_index:
+                continue
+            digit = cascade.digits[index] if index < len(cascade.digits) else None
+            x1, y1, x2, y2 = hit.bbox
+            result.append(ArmorEvidence(
+                color=hit.record.label, digit=digit.label if digit and digit.known else "",
+                armor_confidence=float(hit.confidence),
+                digit_confidence=float(digit.confidence) if digit and digit.known else 0.0,
+                width_px=max(float(x2 - x1), 0.0), height_px=max(float(y2 - y1), 0.0),
+                observed_at=float(observed_at),
+            ))
+        return tuple(result)
 
     def _identity_for(self, cascade: CascadeResult, car_index: int) -> str:
         """完整车辆身份优先；通用车模型则由同车装甲颜色和数字组合。"""

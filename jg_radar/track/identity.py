@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 
 __all__ = ["IdentityVote", "Vote", "corroborated_votes"]
 
@@ -57,6 +58,27 @@ def corroborated_votes(
     # 同时给数字指出的槽位记一小票，让它反复出现时能积累翻盘。
     weakened = max(0.1, 1.0 - disagree_penalty)
     return [Vote(car, weakened), Vote(f"{side}{dig}", conflict_hint_weight)]
+
+
+def armor_votes(evidence) -> list[Vote]:
+    """把同一帧多个读数组合成一组票，矛盾和小图都会降低单一身份的权重。"""
+    scores: dict[str, float] = {}
+    for item in evidence:
+        side = {"red": "R", "blue": "B"}.get(item.color.lower())
+        digit = item.digit.upper()
+        if digit == "S":
+            digit = "7"
+        if not side or not digit:
+            continue
+        size = min(1.0, math.sqrt(max(item.width_px, 0.0) * max(item.height_px, 0.0)) / 25.0)
+        score = min(max(item.armor_confidence, 0.0), 1.0, max(item.digit_confidence, 0.0)) * size
+        label = side + digit
+        scores[label] = max(scores.get(label, 0.0), score)
+    total = sum(scores.values())
+    if total <= 0.0:
+        return []
+    strongest = max(scores.values())
+    return [Vote(label, score / total * strongest) for label, score in scores.items()]
 
 
 @dataclass
