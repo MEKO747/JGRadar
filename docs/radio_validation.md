@@ -1,4 +1,6 @@
-# 无线电与视觉集成验证记录
+# 原 RM_Radio 集成验证记录
+
+以下是替换接收器之前的历史记录。当前构建和联调步骤见 [JGRadio 与 JGRadar 联合运行](radio_integration.md)。
 
 验证日期：2026-11-08。位置：`/home/meko/JGRadar`。
 
@@ -14,14 +16,3 @@
 ROS 检查使用隔离域 198。验证进程结束后已关闭。构建产物位于 radio/RM_Radio 内被忽略的 build/install/log 目录。
 
 本机未安装 GNU Radio，未执行完整 OOT 构建；本次没有打开 RX、相机或进行空口发射。完整运行仍需目标机安装交付包依赖、完成真实相机标定，并复核目标赛季协议。2027 装甲加固、串口发送和实战验收不在当前已完成范围。
-
-可重复运行的安全回归（不访问硬件、无需 DDS 通信）：
-
-```bash
-cd /home/meko/JGRadar
-source radio/RM_Radio/env.sh
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
-  tests/test_rm_radio_integration.py tests/test_rm_radio_ros_types.py \
-  tests/test_fuse_buffer.py tests/test_arbiter_accuracy.py tests/test_arbiter_hysteresis.py \
-  tests/test_pipeline_mailbox.py tests/test_pipeline_replay.py
-```

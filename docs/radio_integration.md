@@ -1,67 +1,53 @@
-# RM_Radio 与 JGRadar 联合运行
+# JGRadio 与 JGRadar 联合运行
 
-接入的是本机 2026-11-06 的 RM_Radio 纯接收源码，副本位于 `radio/RM_Radio/`，原始下载目录保留。解调器、CRC 和六类 ROS 消息保持交付包原样，来源和许可证见该目录 `NOTICE.md`、`LICENSE` 与 `gr-robomaster/COPYING`。本集成不表示完成 2027 协议、装甲加固指令或比赛现场验收。
-
-## 数据路线
-
-HAMGEEK RX2 → GNU Radio 三支路 → ZeroMQ → radio_recive → ROS 2 → RadioAdapter → StageB 最新值缓冲 → 原有仲裁 → `/jg_radar/fused`。
-
-相机 → 原有三级检测、投影与跟踪 → 同一 StageB；视觉与无线电独立更新，视觉没有新帧时仍按时检查过期。融合是选择当前可用来源，沿用现有优先级、切换驻留及误差约束，不把两个坐标简单平均。位置有效期和新鲜阈值沿用 `config/default.yaml` 的 `fuse` 配置。
-
-`/robot_position` 的六个槽位按敌方 1、2、3、4、6、7 映射，单位始终是 cm。输入默认已经是红方场地坐标，与 JGRadar 一致；不会因为己方蓝色再翻转一次。只有测试源明确发送己方视角坐标时才加 `--radio-frame own_team`。映射依据为上游 T-DT 2026 的 radio_callback / publish_timer_callback：
-https://github.com/T-DT-Algorithm-2026/T-DT_Radar/blob/main/src/fusion/kalman_filter/src/kalman_filter.cpp
-
-`(0,0)` 和 `(2800,1500)` 是上游无线电无效哨兵值；越界、非整数也撤回该槽旧坐标。单独 x=0 或 y=0 的合法边界点仍可使用。当前适配器只接受 2800×1500 cm、角色 1/2/3/4/6/7 的 2026 消息；2027 角色/场地/协议需单独适配。
+JGRadio `game` 的 ROS 2 接收包位于 `radio/radar_parse_em_wave/`，包名为 `radar_parse_em_wave`。Fish Ball SDR 接收官方信号，GNU Radio 解调，接收节点校验并发布 ROS 2 消息。JGRadar 将位置观测写入现有 Stage B 缓冲区，由原有仲裁逻辑和视觉跟踪结果共同确定 `/jg_radar/fused` 的输出。
 
 ## 环境与构建
 
-目标为 Ubuntu 24.04、ROS 2 Jazzy、Python 3.12；视觉运行环境还需原有 ONNX/MobileNet 依赖。使用同一 ROS_DOMAIN_ID。当前本机 `.venv` 可以导入系统 Jazzy 的 rclpy（需先 source）。
+目标环境为 Ubuntu 24.04、ROS 2 Jazzy、Python 3.12 和系统 GNU Radio。依赖列表见 [接收包说明](../radio/radar_parse_em_wave/README.md)。通过 `JG_RADAR_PYTHON` 指定能导入 `rclpy`、接收包消息和视觉依赖的 Python，默认用仓库内的 `.venv/bin/python`。ROS 2 发行版默认用 Jazzy，也可以先加载已安装 ROS 2 的 `setup.bash` 或设置 `ROS_DISTRO`。
 
 ```bash
-cd /home/meko/JGRadar
-# 在装有 GNU Radio 及交付包 README 中依赖的目标机，构建完整 RX：
 bash tools/build_radio.sh
-# 若只做 ROS 解析/接口联调（不构建 GNU Radio）：
-bash tools/build_radio.sh --ros-only
-# 检查，不访问 RX 或相机：
 bash tools/start_radio_vision.sh red --no-rx --check
 ```
 
-依赖安装要求见 `radio/RM_Radio/README.md`。`--ros-only` 不会让 GNU Radio 接收器可用。通过 `RM_RADIO_ROOT` 可改用其他已经构建的同版本交付目录；通过 `JG_RADAR_PYTHON` 可指定视觉 Python 3.12 环境。副本移动后应在新目录重新构建。
+构建产物位于 `build/radio/`。使用 `bash tools/build_radio.sh --ros-only` 可构建 ROS 2 接口和 Python 包，适合软件联调。启动本地 SDR 接收需要完整构建生成的 GNU Radio 流图。`--check` 检查配置和消息类型，无需连接设备。
 
 ## 联合启动
 
-先准备真实相机内外参 YAML（可包含 camera / transform / io 分组）。现有 `config/camera.yaml` 是占位标定，不能直接用于真实坐标融合。
+首个参数是己方阵营。下例用 3 级接收位置，并将实测相机标定 YAML 放到配置列表最后。
 
 ```bash
-cd /home/meko/JGRadar
-export ROS_DOMAIN_ID=0
-bash tools/start_radio_vision.sh red \
+bash tools/start_radio_vision.sh red --interference-level 3 \
   --config config/camera.yaml --config config/field.yaml \
   --config config/vision_check.yaml \
   --config /absolute/path/to/your_calibrated_camera.yaml
 ```
 
-`red/blue` 表示己方颜色，并同时传给 RX 与融合映射。默认启动本仓库副本的 RX 和协议节点，再启动实时视觉与 ROS 适配器；退出或任一子进程结束后停止本次启动器的其他进程。不会按进程名关闭别人的程序。仅由本启动器启动一套 RX，避免与旧接收器争抢设备。
+接收板默认使用 `ip:192.168.2.1`，可通过 `--sdr-uri` 指定地址。接收节点负责启动和重启 GNU Radio 流图。增加 `--no-rx` 可连接单独启动的接收节点，增加 `--radio-only` 可跳过相机。跨机器联调需要相同的 `ROS_DOMAIN_ID`、可达的 DDS 网络和同步的系统时钟。
 
-已有 RM_Radio 在另一终端或同域其他机器运行时，增加 `--no-rx`。两端电脑的系统时间须同步，DDS 网络须可达。纯接收融合联调、不打开相机时：
+JGRadar 每秒在 `/rmuc/demod_config` 发布已选的阵营和等级。默认 1 级，1/2 级接收干扰波密钥，3 级同时接收位置等信息波数据。现场若由外部裁判系统节点确定等级，使用 `--interference-level external`。此模式下外部节点应持续下发有效阵营和等级，融合入口收到配置后开始采纳无线电消息。阵营或等级改变时立即撤回之前的无线电观测。
 
 ```bash
-bash tools/start_radio_vision.sh red --radio-only
-# 接收器另行运行时：
-bash tools/start_radio_vision.sh red --no-rx --radio-only
+bash tools/start_radio_vision.sh blue --radio-only --interference-level 3
+bash tools/start_radio_vision.sh blue --no-rx --radio-only --interference-level external
 ```
 
-原测试源需要收窄干扰滤波时，加 `--noise-cutoff 270000`，其适用边界遵循 RX 包 README。`--seconds 10` 可限制融合进程运行时间；`--out out/radio_vision.jsonl` 可选保存融合业务输出，不保存 IQ。
+`--seconds 10` 可限制运行时间，`--out out/radio_vision.jsonl` 可保存融合输出。
 
-## 输出和时效
+## ROS 2 消息和融合坐标
 
-- `/jg_radar/fused`：`std_msgs/String` JSON，沿用 FrameOutput，保留机器人来源、真实观测时间、发布时刻及预测状态。
-- `/jg_radar/radio_status`：`std_msgs/String` JSON，独立报告 position/hp/fire/state/buff/password 的年龄与 valid；业务状态暂按 1 秒 TTL，过期数据仍可用于诊断，使用方必须检查 valid。密钥仅公开收到时间，不把值写入诊断输出。
-- 原来的六类强类型话题全部保留；最终密钥发送继续订阅 `/key_usart_sender`。本项目此前没有裁判串口发送应用，当前集成也未建立实际发送链路。
+| 接收话题 | 内容 | JGRadar 用途 |
+| --- | --- | --- |
+| `/rmuc/rx/packet_0x0a01` | 机器人位置 | 进入现有仲裁缓冲 |
+| `/rmuc/rx/packet_0x0a02` | 血量 | `hp` 状态 |
+| `/rmuc/rx/packet_0x0a03` | 弹量 | `fire` 状态 |
+| `/rmuc/rx/packet_0x0a04` | 场地状态 | `state` 状态 |
+| `/rmuc/rx/packet_0x0a05` | 机器人增益 | `buff` 状态 |
+| `/rmuc/rx/packet_0x0a06` | 干扰波密钥 | `password` 收包状态，密钥值由该强类型话题提供 |
 
-消息原本没有 Header，无法还原真实 RF 采集时刻。本集成利用 DDS 发布时间估计该消息年龄，并转成本机 monotonic 时钟；超过 0.5 秒或发送方时钟明显超前的消息被拒绝，订阅队列只保留 1 条。`--input-latency 秒数` 可减去实测解调延迟；默认 0 表示尚未测得，输出会注明 timestamp_basis，不能把它当成空口采集时间已得到验证。没有新消息时，tick 不刷新任何无线电时间。录像回放使用录制时间，实时 ROS 接入入口只开放真实相机或 radio-only，防止混用时钟。
+`hero`、`engineer`、`infantry3`、`infantry4`、`aerial`、`sentry` 依次映射为对方的 1、2、3、4、6、7 号槽位。使用厘米，按 2026 场地边界 2800 × 1500 校验。`(0,0)` 或越界值会撤回对应槽位的无线电坐标。默认按红方场地坐标解释。现场若确认源数据以己方视角为基准，使用 `--radio-frame own_team`，蓝方输入会绕场地中心旋转 180°。联调时用已知场地点确认坐标轴方向与原点。
 
-## 验收边界
+消息 `header.stamp` 记录接收节点解包发布时刻。桥接将它换算到本机单调时钟，拒绝超过 0.5 秒的消息或明显超前的时钟。`--input-latency` 可填实测的空口到发布延迟，默认为 0。断流时，原有 `fuse` 配置和位置误差约束决定无线电数据何时退出仲裁。
 
-单元验证覆盖红蓝敌方映射、厘米值、显式坐标翻转、无效槽撤回、乱序/旧包拒绝、断流回退与状态独立过期。ROS 联调使用隔离的 ROS_DOMAIN_ID，合成消息与输入字节不进入正式话题域。实际 RX、相机标定、空口误码、长时间稳定性及 2027 新协议需在设备就绪后验证。
+`/jg_radar/fused` 和 `/jg_radar/radio_status` 都是 `std_msgs/String` JSON。融合输出沿用 `FrameOutput`。状态输出按消息分别计算 `age_s` 和 `valid`，有效期为 1 秒。状态字段以新接收包的 ROS 消息为准，密钥状态只包含时效信息。

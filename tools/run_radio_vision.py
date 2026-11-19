@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run JGRadar live vision and RM_Radio subscriptions on one monotonic clock."""
+"""Run JGRadar live vision and RMUC radio subscriptions on one monotonic clock."""
 from __future__ import annotations
 
 import argparse
@@ -16,9 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from jg_radar.config.loader import load_config
-from jg_radar.integration.rm_radio import RadioAdapter
+from jg_radar.integration.game_radio import POSITION_SLOTS, PROTOCOL, RadioAdapter
 from jg_radar.io.sink import JsonlSink
 from jg_radar.pipeline.build import build_loop, build_stage_b
+from jg_radar.types import FIELD_MAX_X_CM, FIELD_MAX_Y_CM
 
 
 def parse_args(argv=None):
@@ -26,8 +27,10 @@ def parse_args(argv=None):
     parser.add_argument("--team", choices=("red", "blue"), required=True, help="own team")
     parser.add_argument("--config", action="append", default=[], help="vision YAML; repeat to overlay")
     parser.add_argument("--radio-frame", choices=("red_field", "own_team"), default="red_field")
+    parser.add_argument("--interference-level", choices=("1", "2", "3", "external"), default="1",
+                        help="receiver level to publish, or external to follow /rmuc/demod_config")
     parser.add_argument("--input-latency", type=float, default=0.0,
-                        help="measured RF/decode delay in seconds; headerless protocol cannot measure it")
+                        help="measured RF-to-ROS-publication delay in seconds")
     parser.add_argument("--radio-only", action="store_true", help="subscribe and arbitrate without camera")
     parser.add_argument("--out", default="", help="optional fused JSONL; no IQ recording")
     parser.add_argument("--seconds", type=float, default=0.0, help="stop after this duration; 0=unlimited")
@@ -46,20 +49,20 @@ def main(argv=None):
     args = parse_args(argv)
     paths = [ROOT / "config/default.yaml", *args.config]
     cfg = load_config(*paths)
-    if cfg.field.size_x_cm != 2800 or cfg.field.size_y_cm != 1500:
-        raise ValueError("tdt_2026 radio adapter requires the existing 2800 x 1500 cm field")
-    if not all(side + role in cfg.slot_names() for side in ("R", "B")
-               for role in ("1", "2", "3", "4", "6", "7")):
+    if (cfg.field.size_x_cm, cfg.field.size_y_cm) != (FIELD_MAX_X_CM, FIELD_MAX_Y_CM):
+        raise ValueError("RMUC 2026 radio adapter requires a 2800 x 1500 cm field")
+    if not all(side + role in cfg.slot_names() for side in ("R", "B") for role, _ in POSITION_SLOTS):
         raise ValueError("radio position slots require both sides and roles 1,2,3,4,6,7")
     # Keep ROS optional for all existing vision-only tools.
     try:
         from jg_radar.integration.ros_radio import RadioBridge
     except ImportError as exc:
-        raise RuntimeError("ROS 2/radio_interface unavailable; source radio/RM_Radio/env.sh "
-                           "and use a Python 3.12 environment with rclpy") from exc
+        raise RuntimeError("ROS 2/radar_parse_em_wave unavailable. Use tools/start_radio_vision.sh "
+                           "with a ROS-compatible Python environment.") from exc
     if args.check:
         print(json.dumps({"ros_messages": "ready", "team": args.team,
-                          "protocol": "tdt_2026", "radio_frame": args.radio_frame,
+                          "protocol": PROTOCOL, "radio_frame": args.radio_frame,
+                          "interference_level": args.interference_level,
                           "vision_configs": [str(p) for p in paths]}, ensure_ascii=False))
         return 0
     loop = None
@@ -86,7 +89,8 @@ def main(argv=None):
     frames = 0
     last_report = started
     try:
-        bridge = RadioBridge(adapter)
+        level = None if args.interference_level == "external" else int(args.interference_level)
+        bridge = RadioBridge(adapter, interference_level=level)
         if args.out:
             sink = JsonlSink(args.out)
         if loop is not None:
