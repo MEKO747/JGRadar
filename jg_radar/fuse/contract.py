@@ -136,6 +136,9 @@ class LatestValueBuffer:
         with self._lock:
             return len(self._items)
 
-    def clear(self) -> None:
+    def clear(self, *, source: SourceKind | None = None) -> None:
         with self._lock:
-            self._items.clear()
+            if source is None:
+                self._items.clear()
+            else:
+                self._items = {key: item for key, item in self._items.items() if key[0] is not source}
