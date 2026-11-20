@@ -195,6 +195,10 @@ zsh -c 'source ~/.jg_env.zsh; python3 tools/stage3_accept.py \
 真值文件格式（`--truth`）：CSV，列 `t0,t1,slot,x_cm,y_cm`，表示某车在 `[t0,t1)` 内的真值位置。
 `--switch-event slot=秒` 是操作手制造换源刺激（拔网线/遮挡）的时刻，没有它换源延迟量不出来。
 
+`--operator 你的名字`：报告 §1 要写操作者。不给就退到 `git config user.name`（可能只是仓库主人，
+不等于现场操作者），两者都拿不到写成 `unset` 并进 `caveats`——**空串比 `unset` 更糟，它看着像填了**。
+报告里的 `reproduce.commands` 只拼真正生效的参数，可以原样复制重跑。
+
 ## 9. 症状 → 先查什么
 
 | 症状 | 先查 |

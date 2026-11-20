@@ -19,6 +19,9 @@ from tools.stage3_accept import (
     build_report,
     check_radio_uplink,
     check_vision_calibration,
+    empty_flag_values,
+    interpreter_hint,
+    reproduce_command,
     selftest,
 )
 
@@ -143,3 +146,76 @@ def test_verdict_aggregation(tmp_path, times_ok):
         assert report["verdict"] == FAIL
     else:
         assert report["verdict"] == BLOCKED
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-21 追加：标定 fail 路径、复现命令不留空 flag、operator 不许是空串
+# ---------------------------------------------------------------------------
+def test_calibration_fail_when_rms_over_limit(tmp_path):
+    """四项齐全但实测 rms 超限 → fail（既不是 blocked，更不是 pass）。"""
+    camera = tmp_path / "over.yaml"
+    camera.write_text("camera:\n  name: MV-CS060-10GC\n  reproj_rms_px: 5.2\n"
+                      "  reproj_rms_max_px: 3.0\n"
+                      "calibration:\n  serial: 'DA1'\n  date: '2026-12-01'\n", encoding="utf-8")
+    result = check_vision_calibration(camera)
+    assert result["status"] == FAIL
+    assert "reproj_rms_px" in result["reason"]
+    assert result["value"]["reproj_rms_px"] == 5.2
+    assert result["value"]["limit_px"] == 3.0
+
+
+def test_calibration_pass_is_caveated_as_config_only(tmp_path):
+    """配置合格 ≠ 标定在真机上做过，这句必须出现在 caveats 里。"""
+    camera = tmp_path / "full.yaml"
+    camera.write_text("camera:\n  name: MV-CS060-10GC\n  reproj_rms_px: 0.62\n"
+                      "  reproj_rms_max_px: 3.0\n"
+                      "calibration:\n  serial: 'DA1'\n  date: '2026-12-01'\n", encoding="utf-8")
+    report = build_report(radio_log=None, truth=None, fusion_log=None, switch_event=None,
+                          camera=camera, evidence_grade="B", devices=[], commands=[])
+    calibration = next(item for item in report["checks"] if item["id"] == "vision_calibration")
+    assert calibration["status"] == PASS
+    assert any("不等于标定确实在真机上做过" in text for text in report["caveats"])
+
+
+def test_reproduce_command_never_leaves_empty_flags():
+    assert reproduce_command() == f"{interpreter_hint()} tools/stage3_accept.py"
+    assert "python" in interpreter_hint()  # 本机 `python` 不在 PATH 上，不能写死它
+    assert empty_flag_values(reproduce_command()) == []
+
+    partial = reproduce_command(radio_log="out/live.jsonl", switch_event="B1=12.3")
+    assert empty_flag_values(partial) == []
+    assert partial == (f"{interpreter_hint()} tools/stage3_accept.py "
+                       "--radio-log out/live.jsonl --switch-event B1=12.3")
+    # 没给的参数、以及等于默认值的参数都不许出现
+    assert "out/fused.jsonl" not in partial
+    assert "--camera" not in partial and "--out" not in partial
+
+
+def test_empty_flag_detector_catches_the_old_bug():
+    """回归：`d06776c` 生成的复现命令就长这样，现场照抄会当场报错。"""
+    old = ("python tools/stage3_accept.py --radio-log  --truth  "
+           "--fusion-log  --switch-event ")
+    assert empty_flag_values(old) == ["--radio-log", "--truth", "--fusion-log", "--switch-event"]
+
+
+def test_operator_is_never_empty():
+    kwargs = dict(radio_log=None, truth=None, fusion_log=None, switch_event=None,
+                  camera=None, evidence_grade="C", devices=[], commands=[])
+    explicit = build_report(operator="张三", **kwargs)
+    assert explicit["operator"] == "张三"
+    assert explicit["operator_source"] == "arg"
+    # 不给 --operator 就退到 git config user.name；本机一定有值，但绝不允许空串
+    fallback = build_report(**kwargs)
+    assert fallback["operator"].strip()
+    assert fallback["operator"] != ""
+
+
+def test_operator_unset_is_flagged_in_caveats(monkeypatch):
+    import tools.stage3_accept as module
+
+    monkeypatch.setattr(module, "_git", lambda *args: "")
+    report = build_report(radio_log=None, truth=None, fusion_log=None, switch_event=None,
+                          camera=None, evidence_grade="C", devices=[], commands=[])
+    assert report["operator"] == "unset"
+    assert report["operator_source"] == "unset"
+    assert any("operator 未填" in text for text in report["caveats"])

@@ -19,7 +19,8 @@
 
     .venv/bin/python tools/stage3_accept.py --selftest
     .venv/bin/python tools/stage3_accept.py --radio-log out/live.jsonl --truth out/points.csv \\
-        --fusion-log out/fused.jsonl --switch-event B1=12.3 --out out/stage3_accept
+        --fusion-log out/fused.jsonl --switch-event B1=12.3 --out out/stage3_accept \\
+        --operator 张三
 """
 
 from __future__ import annotations
@@ -67,6 +68,60 @@ def _git(*args: str) -> str:
                               text=True, check=True).stdout.strip()
     except Exception:  # noqa: BLE001 —— 没有 git 不该让验收跑不起来
         return ""
+
+
+def resolve_operator(explicit: str | None = None) -> tuple[str, bool]:
+    """``--operator`` → ``git config user.name`` → ``"unset"``，返回 ``(名字, 是否未填)``。
+
+    空串比 ``"unset"`` 更糟——它看着像填了，所以拿不到就显式写 ``unset`` 并进 caveats。
+    """
+    for candidate in (explicit, _git("config", "user.name")):
+        name = str(candidate or "").strip()
+        if name:
+            return name, False
+    return "unset", True
+
+
+def interpreter_hint() -> str:
+    """复现命令里的解释器：用真跑起来的那个。
+
+    本机 ``python`` 不在 PATH 上，写死 ``python`` 的复现命令照抄会 command not found；
+    在仓库内就用相对路径（``.venv/bin/python``），换机器退到绝对路径。
+    """
+    try:
+        return str(Path(sys.executable).relative_to(ROOT))
+    except ValueError:
+        return sys.executable
+
+
+def reproduce_command(*, radio_log="", truth="", fusion_log="", switch_event="",
+                      camera="", out="", evidence_grade="", operator="") -> str:
+    """只拼实际生效的参数：空值与默认值一律省略。
+
+    旧版把空 flag 也拼进去（``--radio-log  --truth  ...``），现场照抄当场报错；
+    命令能原样复制运行，才算复现包。
+    """
+    defaults = {"--camera": str(ROOT / "config" / "camera.yaml"),
+                "--out": str(ROOT / "out" / "stage3_accept"),
+                "--evidence-grade": "B"}
+    parts = [interpreter_hint(), "tools/stage3_accept.py"]
+    for flag, value in (("--radio-log", radio_log), ("--truth", truth),
+                        ("--fusion-log", fusion_log), ("--switch-event", switch_event),
+                        ("--camera", camera), ("--out", out),
+                        ("--evidence-grade", evidence_grade), ("--operator", operator)):
+        text = str(value or "").strip()
+        if not text or text == defaults.get(flag):
+            continue
+        parts.append(f"{flag} {text}")
+    return " ".join(parts)
+
+
+def empty_flag_values(command: str) -> list[str]:
+    """列出「后面没跟值」的 flag：``--radio-log  --truth`` 里的 ``--radio-log`` 就是空值。"""
+    tokens = command.split()
+    return [token for index, token in enumerate(tokens)
+            if token.startswith("--") and (index + 1 >= len(tokens)
+                                           or tokens[index + 1].startswith("--"))]
 
 
 def _artifact(path: Path | None, kind: str, duration_s: float | None = None) -> dict | None:
@@ -325,7 +380,8 @@ def dirty_file_count() -> int:
 def build_report(*, radio_log: Path | None, truth: list[dict] | None,
                  fusion_log: Path | None, switch_event: tuple[str, float] | None,
                  camera: Path | None, evidence_grade: str = "B",
-                 devices: list[dict] | None = None, commands: list[str] | None = None) -> dict:
+                 devices: list[dict] | None = None, commands: list[str] | None = None,
+                 operator: str | None = None) -> dict:
     checks = [
         {"id": "radio_accuracy", **check_radio_accuracy(radio_log, truth)},
         {"id": "radio_uplink", **check_radio_uplink(radio_log)},
@@ -384,6 +440,14 @@ def build_report(*, radio_log: Path | None, truth: list[dict] | None,
                           "slots": sorted({seg["slot"] for seg in truth})})
 
     caveats = ["本报告只验证四项判据，不证明检测精度；内置 UVC 画面不算视觉证据。"]
+    operator_name, operator_missing = resolve_operator(operator)
+    if operator_missing:
+        caveats.append("operator 未填：--operator 与 git config user.name 都没拿到，"
+                       "报告里写 unset —— 这次运行没有可追溯的操作者。")
+    calibration = next(item for item in checks if item["id"] == "vision_calibration")
+    if calibration["status"] != BLOCKED:
+        caveats.append("标定配置四项齐全且 rms 在限内，不等于标定确实在真机上做过；"
+                       "A 级签核补这一层。")
     blocked_ids = [item["id"] for item in checks if item["status"] == BLOCKED]
     if blocked_ids:
         caveats.append("以下项无证据，verdict 因此不是 pass：" + "、".join(blocked_ids))
@@ -394,7 +458,9 @@ def build_report(*, radio_log: Path | None, truth: list[dict] | None,
         "schema": SCHEMA,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "goal": "JGRadar 2027 雷达站：无线电解调 → 多源融合 → 0x0305 上报",
-        "operator": "",
+        "operator": operator_name,
+        "operator_source": "unset" if operator_missing else (
+            "arg" if str(operator or "").strip() else "git"),
         "commit": _git("rev-parse", "--short", "HEAD") or "unknown",
         "dirty_files": dirty_file_count(),
         "config_sha256": _fingerprint(),
@@ -472,7 +538,12 @@ def selftest() -> int:
                                   evidence_grade="C", devices=_synthetic_devices(),
                                   commands=[f"selftest --case {label}"])
             results[label] = {"verdict": report["verdict"], "grade": report["evidence_grade"],
+                              "operator": report["operator"],
                               "checks": {item["id"]: item["status"] for item in report["checks"]}}
+            if not str(report["operator"]).strip():
+                print(json.dumps({"selftest": "failed", "case": f"{label}:empty-operator",
+                                  "got": results[label]}, ensure_ascii=False))
+                return 1
             if report["verdict"] != expected:
                 print(json.dumps({"selftest": "failed", "case": label, "expected": expected,
                                   "got": results[label]}, ensure_ascii=False))
@@ -489,6 +560,19 @@ def selftest() -> int:
                              ensure_ascii=False))
             return 1
         results["no_device"] = baseline
+    # 复现命令里不许留空 flag：现场照抄 ``--radio-log  --truth`` 会当场报错
+    old_bug = ("python tools/stage3_accept.py --radio-log  --truth  "
+               "--fusion-log  --switch-event ")
+    for label, command in (("bare", reproduce_command()),
+                           ("partial", reproduce_command(radio_log="out/live.jsonl",
+                                                         switch_event="B1=12.3")),
+                           ("old_bug", old_bug)):
+        empty = empty_flag_values(command)
+        results[f"command_{label}"] = {"command": command, "empty_flags": empty}
+        if bool(empty) != (label == "old_bug"):
+            print(json.dumps({"selftest": "failed", "case": f"command_{label}",
+                              "got": results[f"command_{label}"]}, ensure_ascii=False))
+            return 1
     print(json.dumps({"selftest": "ok", "cases": results}, ensure_ascii=False, indent=2))
     return 0
 
@@ -503,6 +587,8 @@ def main(argv=None) -> int:
     parser.add_argument("--out", default=str(ROOT / "out" / "stage3_accept"))
     parser.add_argument("--evidence-grade", choices=("B", "C"), default="B",
                         help="A 级只能由真机现场人工签字，工具不发 A")
+    parser.add_argument("--operator", default="",
+                        help="谁跑的这次验收；缺省退到 git config user.name，都拿不到写 unset")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(argv)
 
@@ -521,9 +607,12 @@ def main(argv=None) -> int:
         switch_event=switch_event,
         camera=Path(args.camera) if args.camera else None,
         evidence_grade=args.evidence_grade,
-        commands=[f"python tools/stage3_accept.py --radio-log {args.radio_log} "
-                  f"--truth {args.truth} --fusion-log {args.fusion_log} "
-                  f"--switch-event {args.switch_event}"],
+        operator=args.operator,
+        commands=[reproduce_command(radio_log=args.radio_log, truth=args.truth,
+                                    fusion_log=args.fusion_log,
+                                    switch_event=args.switch_event, camera=args.camera,
+                                    out=args.out, evidence_grade=args.evidence_grade,
+                                    operator=args.operator)],
     )
 
     out = Path(args.out) / datetime.now().strftime("%Y%m%d_%H%M%S")
