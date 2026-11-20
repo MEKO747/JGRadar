@@ -81,25 +81,20 @@ class OnnxBackend:
         try:
             available = ort.get_available_providers()
             # pip 安装的 NVIDIA 运行库未必位于系统动态库搜索路径。
-            # 在创建 CUDA 会话前加载它们，否则 ORT 可能退回 CPU。
+            # 在创建 CUDA 会话前加载它们，否则 ORT 会**静默**退回 CPU。
+            #
+            # 注意：不能用 ``importlib.util.find_spec("nvidia.cudnn")`` 去找——
+            # 本仓库全程 PYTHONNOUSERSITE=1，用户 site 里的 nvidia 轮子不在
+            # sys.path 上，find_spec 会返回 None，于是"库明明在磁盘上"却被判成
+            # "没装"，CUDA 执行器建不起来、帧率掉到 1fps 也不报错。
+            # 现在按**路径**扫 site-packages（见 gpu_env）。
             if "CUDAExecutionProvider" in available and hasattr(ort, "preload_dlls"):
-                cudnn_dir = None
-                if sys.platform == "linux":
-                    # cuDNN 可以来自用户 site-packages，而 ORT 位于虚拟环境。
-                    # ORT 的默认搜索只查看它自己的相邻 nvidia 目录。
-                    try:
-                        spec = importlib.util.find_spec("nvidia.cudnn")
-                    except ModuleNotFoundError:
-                        spec = None
-                    if spec is not None:
-                        for root in spec.submodule_search_locations or ():
-                            directory = Path(root) / "lib"
-                            if (directory / "libcudnn.so.9").is_file():
-                                cudnn_dir = str(directory)
-                                break
-                ort.preload_dlls(cuda=True, cudnn=cudnn_dir is None, msvc=False)
-                if cudnn_dir:
-                    ort.preload_dlls(cuda=False, cudnn=True, msvc=False, directory=cudnn_dir)
+                from jg_radar.integration.gpu_env import preload_cuda_libs
+
+                self._cuda_preload = preload_cuda_libs(ort)
+                if not self._cuda_preload["preloaded"]:
+                    # 老路径兜底（例如 Windows 上 cuDNN 直接放在 ORT 旁边）
+                    ort.preload_dlls(cuda=True, cudnn=True, msvc=False)
             providers = [
                 p for p in ("CUDAExecutionProvider", "CPUExecutionProvider")
                 if p in available

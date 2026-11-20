@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from jg_radar.detect.backends.onnx_backend import OnnxBackend
+from jg_radar.integration import gpu_env
 
 
 @pytest.mark.parametrize("cuda", [True, False])
@@ -27,7 +28,8 @@ def test_cuda_libraries_load_before_creating_a_session(tmp_path, monkeypatch, cu
     runtime = SimpleNamespace(get_available_providers=lambda: providers,
                               preload_dlls=preload, InferenceSession=session)
     monkeypatch.setitem(sys.modules, "onnxruntime", runtime)
-    monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
+    # 这台机器上确实装着 cuDNN；这条测的是"找不到时"的兜底路径
+    monkeypatch.setattr(gpu_env, "cudnn_lib_dir", lambda roots=None: None)
     model = tmp_path / "model.onnx"
     model.touch()
     backend = OnnxBackend(model)
@@ -36,13 +38,16 @@ def test_cuda_libraries_load_before_creating_a_session(tmp_path, monkeypatch, cu
     assert events == (["preload", "session"] if cuda else ["session"])
 
 
-def test_linux_cudnn_in_another_site_packages_is_preloaded(tmp_path, monkeypatch):
-    monkeypatch.setattr(sys, "platform", "linux")
+def test_cudnn_outside_the_venv_is_preloaded_by_path(tmp_path, monkeypatch):
+    """cuDNN 在用户 site 里也要能加载——按路径找，不按 import 找。
+
+    仓库全程 ``PYTHONNOUSERSITE=1``，用户 site 不在 ``sys.path`` 上，所以
+    ``importlib.util.find_spec("nvidia.cudnn")`` 会返回 None，但库文件就在磁盘上。
+    """
     library = tmp_path / "user-site" / "nvidia" / "cudnn" / "lib"
     library.mkdir(parents=True)
-    (library / "libcudnn.so.9").touch()
-    monkeypatch.setattr("importlib.util.find_spec", lambda name: SimpleNamespace(
-        submodule_search_locations=[str(library.parent)]))
+    (library / gpu_env.CUDNN_SONAME).touch()
+    monkeypatch.setattr(gpu_env, "cudnn_lib_dir", lambda roots=None: library)
     events = []
 
     def session(*args, **kwargs):
@@ -60,8 +65,7 @@ def test_linux_cudnn_in_another_site_packages_is_preloaded(tmp_path, monkeypatch
     backend.load()
     assert backend.is_ready
     assert events == [
-        {"cuda": True, "cudnn": False, "msvc": False},
-        {"cuda": False, "cudnn": True, "msvc": False, "directory": str(library)},
+        {"cuda": True, "cudnn": True, "msvc": False, "directory": str(library)},
         "session",
     ]
 
