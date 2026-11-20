@@ -87,3 +87,42 @@ Access Code 允许 5 bit 误码，所以「帧同步」这一级本身偏宽松�
 消息 `header.stamp` 记录接收节点解包发布时刻。桥接将它换算到本机单调时钟，拒绝超过 0.5 秒的消息或明显超前的时钟。`--input-latency` 可填实测的空口到发布延迟，默认为 0。断流时，原有 `fuse` 配置和位置误差约束决定无线电数据何时退出仲裁。
 
 `/jg_radar/fused` 和 `/jg_radar/radio_status` 都是 `std_msgs/String` JSON。融合输出沿用 `FrameOutput`。状态输出按消息分别计算 `age_s` 和 `valid`，有效期为 1 秒。状态字段以新接收包的 ROS 消息为准，密钥状态只包含时效信息。
+
+## 上行：把雷达坐标发给选手端（0x0305）
+
+雷达站算出的位置要回给己方选手端的小地图，走的是 `0x0305`（48 字节，
+雷达→服务器→己方所有选手端，**频率上限 5 Hz**）。2027 协议里每方只有
+**重装(1)、3 号步兵(3)、4 号步兵(4)、哨兵(7)** 四个有效位，工程和空中是
+保留位；`x = y = 0` 表示「未发送此机器人坐标」，不是「它在原点」。
+
+发送端在 `jg_radar/integration/referee_tx.py`，接在融合主循环里：
+
+```zsh
+# 只统计不发送（没有串口设备时先这么验证节拍）
+bash tools/start_radio_vision.sh red --radio-only --referee-tx
+
+# 真发：接裁判系统串口
+bash tools/start_radio_vision.sh red --radio-only --referee-tx --referee-serial /dev/ttyUSB0
+```
+
+要点：
+
+- 默认 **4.8 Hz**（留 0.2 Hz 余量，不贴上限），`--referee-rate-hz` 可以写大，
+  但代码会夹到 5 Hz 并在日志里说明。
+- `--referee-stale-policy drop`（默认）遇到过期坐标写 `(0,0)`；
+  `send_stale` 则照发旧值并计入 `sent_stale`。默认选 `drop`：发过期坐标大概率
+  被判 `d≥1.6m` 的错误，而错误会重置累计值，比不发更亏。这个结论要用回放里
+  整条 P(t) 曲线验证，不能靠直觉。
+- `--referee-stale-after` 是「多少秒算过期」，默认 0.5 秒，和仲裁器的
+  `stale_mark_s` 对齐。
+- `--referee-log out/referee_0305.jsonl` 把每一帧的内容（四个槽位、年龄、
+  策略）落盘，用于对账和论文统计。
+- 串口打不开时**不会拖垮视觉**：启动时打印 `referee_tx_error` 并退化成只计数；
+  运行中拔线则记一次失败后停止尝试（`failed` 置位），统计里看得见。
+
+线格式（`0xA5` 帧头 + CRC8 + CRC16）在 `radio/radar_parse_em_wave/rmuc/referee_frame.py`，
+和接收方向共用同一份 CRC 表。统计字段：`frames_sent`、`effective_rate_hz`、
+`dropped`（每台因无坐标或过期写成 `(0,0)` 的次数）、`sent_stale`、`last_max_age_s`。
+
+联调验收：连续 10 秒无信号时真实发送 48 帧（4.806 Hz）、每台写 `(0,0)`；
+断流 0.6 秒时 `drop` 下该台为 `(0,0)`、`send_stale` 下发出旧值。
