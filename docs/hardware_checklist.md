@@ -173,6 +173,28 @@ zsh -c 'source ~/.jg_env.zsh; source /opt/ros/jazzy/setup.zsh; \
 
 **失败先看**：① 内存增长先看是否某个队列无界；② 时间漂移看 `t` 列；③ `dmesg` 里的 USB/网卡事件。
 
+## 8.5 一条命令出验收报告
+
+走完 1~8 步、原始数据落盘之后，用一条命令出 `report.json`（结构见
+[STAGE3_REPORT_SCHEMA.md](experiments/STAGE3_REPORT_SCHEMA.md)）：
+
+```zsh
+zsh -c 'source ~/.jg_env.zsh; python3 tools/stage3_accept.py \
+    --radio-log out/live.jsonl --truth out/points.csv \
+    --fusion-log out/fused.jsonl --switch-event B1=12.3 \
+    --out out/stage3_accept'
+```
+
+- 四项判据写死在该工具里（`radio_accuracy` / `radio_uplink` / `vision_calibration` / `fusion_switch`），
+  与 goal 完全一致；工具不会自己发明门槛。
+- 每项三态 `pass | fail | blocked`，缺输入一律 `blocked`，**绝不判 pass**。
+- 报告带 `commit`、`dirty_files`、`config_sha256`、`devices[]`、`artifacts[]`（含 sha256）和
+  `caveats[]`；`evidence_grade` 取四项里最低，**工具最高只给 B**，A 级要人工签字。
+- 设备没到位时跑它是合法的：输出全 `blocked` + `evidence_grade: D`，这份基线本身可以进台账。
+
+真值文件格式（`--truth`）：CSV，列 `t0,t1,slot,x_cm,y_cm`，表示某车在 `[t0,t1)` 内的真值位置。
+`--switch-event slot=秒` 是操作手制造换源刺激（拔网线/遮挡）的时刻，没有它换源延迟量不出来。
+
 ## 9. 症状 → 先查什么
 
 | 症状 | 先查 |
