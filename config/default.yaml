@@ -140,7 +140,12 @@ fuse:
   radio_fresh_s: 0.2
   radio_stale_s: 10.0
   vision_watchdog_s: 0.5
-  dwell_s: 0.3
+  # 换源驻留：0.2s 新鲜窗 + 0.2s 驻留 = 0.4s 等效换源延迟，离规则「累计 0.5s
+  # 无数据记一次错误」留 0.1s 余量。**这一行曾经是 0.3 而 schema 改成 0.2，
+  # yaml 覆盖代码默认值，改了等于没改**；现在 tests/test_config_defaults.py 会
+  # 加载这个文件并逐字段比对 FuseConfig 的默认值，再漂移就直接红。
+  dwell_s: 0.2
+  stale_mark_s: 0.5
   switch_jump_cm: 150.0
   reacquire_s: 0.8
   # 第二条轴：哪个坐标更准，而不是"哪一种证据"。比值 500/500 = 1.0s
