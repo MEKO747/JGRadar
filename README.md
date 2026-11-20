@@ -5,6 +5,7 @@
 无线电接收使用 `radio/radar_parse_em_wave/` 中的 JGRadio 赛场接收包。联合入口为 `tools/start_radio_vision.sh`。详见 [无线电与视觉集成说明](docs/radio_integration.md) 和 [视觉架构说明](ARCHITECTURE.md)。调参不靠猜：用 [离线回放与参数扫描](docs/radio_tuning.md) 在真实流图上对同一段 IQ 反复跑。
 0x0305 该发什么、能拿多少 P：见 [被标记进度与过期策略](docs/marking_progress.md)。
 真机上手先看 [真机链路验证清单](docs/hardware_checklist.md)：每步命令、期望输出、通过判据和失败先查什么。
+推理还没到实时：[推理依赖与测速评估](docs/inference_deps.md) 有实测数字、两个安装方案的体积和一条测速命令。
 
 ```bash
 bash tools/build_radio.sh
