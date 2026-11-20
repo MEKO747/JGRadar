@@ -35,6 +35,35 @@ bash tools/start_radio_vision.sh blue --no-rx --radio-only --interference-level 
 
 `--seconds 10` 可限制运行时间，`--out out/radio_vision.jsonl` 可保存融合输出。
 
+## 诊断：卡在帧同步还是压根没信号
+
+`packet_0x0a0x` 话题没有数据时，两种原因的处理方式完全不同：空口没有信号，
+和信号有但解不出来。`tools/radio_probe.py` 用接收包自己的解码器逐级计数，
+把这两种情况分开。
+
+```bash
+source ~/.jg_env.zsh
+python3 tools/radio_probe.py                # 旁听 10 秒，默认
+python3 tools/radio_probe.py --seconds 30
+python3 tools/radio_probe.py --mode watch   # 打印解出的业务包内容
+```
+
+`bits` 模式（默认）连接 GNU Radio 推出的两路比特流——53103 信息波、53104
+干扰波——按 `比特 → 空口帧 → 序列帧 → 业务包` 四级统计，然后对每一路给出
+一句结论：
+
+| 现象 | 结论 |
+| --- | --- |
+| 没有任何比特 | 流图没跑，或端口不通 |
+| 有比特、空口帧为 0 | 这一路是噪声，空口没有可用信号 |
+| 空口帧偶发（< 1 次/秒） | 信号很弱或误码过高，撑不完一帧 |
+| 有空口帧、序列帧为 0 | 帧头、长度或 CRC8 不过 |
+| 有序列帧、业务包为 0 | CRC16 过了但命令字/长度与当前协议不符 |
+
+它不启动接收节点、不占设备，可以和正在运行的实例同时用。注意空口帧的
+Access Code 允许 5 bit 误码，所以「帧同步」这一级本身偏宽松；判断信号
+好坏要看后两级的通过率。
+
 ## ROS 2 消息和融合坐标
 
 | 接收话题 | 内容 | JGRadar 用途 |
