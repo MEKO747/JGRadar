@@ -7,6 +7,7 @@ publication_seq 单调递增，published_at 表达发布时刻；frame_seq 仍�
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Mapping, Sequence
 
 from jg_radar.fuse.arbiter import SlotDecision
@@ -31,6 +32,10 @@ class PublishLayer:
         )
         self._last_source: dict[str, SourceKind] = {}
         self.frames = 0
+        #: 每帧每个槽位落到了哪个档位。档位名按仲裁器的 ``tier`` 记，
+        #: 没有任何候选的槽位记成 ``missing``——"预测占多少比例"这种问题
+        #: 必须能用一次运行自己的日志回答，而不是靠人肉翻帧。
+        self.tier_counts: Counter[str] = Counter()
 
     def build(
         self,
@@ -63,6 +68,11 @@ class PublishLayer:
         # 契约已经带了 ``source`` 和 ``observed_at``，年龄可以从两者算出来，
         # 但"算得出来"和"一眼看得见"是两件事——将来按规则记错的 0x0305
         # 发送端要的就是这一眼。
+        for name in robots:
+            decision = decisions.get(name)
+            self.tier_counts["missing" if decision is None or decision.tier is None
+                             else decision.tier] += 1
+
         stale_slots = 0
         for name, decision in decisions.items():
             if name not in robots or decision is None:
@@ -127,6 +137,17 @@ class PublishLayer:
         slot.validate()
         return slot
 
+    def tier_share(self) -> dict[str, float]:
+        """各档位占总槽位帧的比例，按占比从高到低。"""
+        total = sum(self.tier_counts.values())
+        if total <= 0:
+            return {}
+        return {
+            tier: count / total
+            for tier, count in sorted(self.tier_counts.items(), key=lambda item: -item[1])
+        }
+
     def reset(self) -> None:
         self._last_source.clear()
         self.frames = 0
+        self.tier_counts.clear()

@@ -217,7 +217,8 @@ def main(argv=None):
                 active = {name: slot.source.value for name, slot in out.robots.items() if slot.is_valid}
                 report = {"frames": frames, "radio_frames": adapter.position_frames,
                           "rejected_radio_frames": adapter.rejected_frames,
-                          "active_sources": active}
+                          "active_sources": active,
+                          "tier_share": stage_b.publisher.tier_share()}
                 if referee is not None:
                     report["referee_tx"] = referee.snapshot()
                 print(json.dumps(report, ensure_ascii=False), flush=True)
@@ -242,7 +243,8 @@ def main(argv=None):
                   flush=True)
         for sig, handler in previous_signals.items():
             signal.signal(sig, handler)
-    print(json.dumps({"frames": frames, "radio_frames": adapter.position_frames}, ensure_ascii=False))
+    print(json.dumps({"frames": frames, "radio_frames": adapter.position_frames,
+                      "tier_share": stage_b.publisher.tier_share()}, ensure_ascii=False))
     return 0
 
 
