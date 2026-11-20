@@ -107,8 +107,12 @@ bash tools/start_radio_vision.sh red --radio-only --referee-tx --referee-serial 
 
 要点：
 
-- 默认 **4.8 Hz**（留 0.2 Hz 余量，不贴上限），`--referee-rate-hz` 可以写大，
-  但代码会夹到 5 Hz 并在日志里说明。
+- 默认 **4.7 Hz**（`referee_tx.DEFAULT_RATE_HZ`），`--referee-rate-hz` 可以写大，
+  但代码会夹到 5 Hz 并在日志里说明。为什么不是 4.8：节拍按相位对齐后，4.8 Hz 下
+  某些 1 秒窗口正好落满 5 帧，压在上限线上零余量；4.7 Hz 下最坏窗口仍是 5 帧
+  （6 帧要求 5 个周期 ≤1 s，即 ≥5 Hz，结构上做不到），平均留出约 6% 余量，
+  代价是累积到阈值的时间约 +2%，可以忽略。
+- 统计里的 `max_frames_1s` 就是「最近 1 秒窗口最大帧数」，现场直接看它有没有贴线。
 - `--referee-stale-policy drop`（默认）遇到过期坐标写 `(0,0)`；
   `send_stale` 则照发旧值并计入 `sent_stale`。默认选 `drop`：发过期坐标大概率
   被判 `d≥1.6m` 的错误，而错误会重置累计值，比不发更亏。这个结论要用回放里

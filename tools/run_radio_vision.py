@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 
 from jg_radar.config.loader import load_config
 from jg_radar.integration.game_radio import POSITION_SLOTS, PROTOCOL, RadioAdapter
+from jg_radar.integration.referee_tx import DEFAULT_RATE_HZ
 from jg_radar.io.sink import JsonlSink
 from jg_radar.pipeline.build import build_loop, build_stage_b
 from jg_radar.types import FIELD_MAX_X_CM, FIELD_MAX_Y_CM
@@ -36,12 +37,12 @@ def parse_args(argv=None):
     parser.add_argument("--seconds", type=float, default=0.0, help="stop after this duration; 0=unlimited")
     parser.add_argument("--check", action="store_true", help="check ROS/types/config without opening devices")
     parser.add_argument("--referee-tx", action="store_true",
-                        help="按 4.8Hz 把融合结果发成 0x0305（雷达→服务器→选手端）")
+                        help=f"按 {DEFAULT_RATE_HZ:g}Hz 把融合结果发成 0x0305（雷达→服务器→选手端）")
     parser.add_argument("--referee-serial", default="",
                         help="0x0305 的串口设备，例如 /dev/ttyUSB0；不填则只统计不发送")
     parser.add_argument("--referee-baud", type=int, default=115200)
-    parser.add_argument("--referee-rate-hz", type=float, default=4.8,
-                        help="发送频率，协议上限 5Hz，写大了会被夹到 5")
+    parser.add_argument("--referee-rate-hz", type=float, default=DEFAULT_RATE_HZ,
+                        help="发送频率，默认值取自 referee_tx.DEFAULT_RATE_HZ；协议上限 5Hz，写大了会被夹到 5")
     parser.add_argument("--referee-stale-policy", choices=("drop", "send_stale"), default="drop",
                         help="坐标过期后：drop 写 (0,0)，send_stale 照发旧值")
     parser.add_argument("--referee-stale-after", type=float, default=0.5,

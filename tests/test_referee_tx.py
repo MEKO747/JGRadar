@@ -5,7 +5,7 @@
 2027 每方只有重装/3 号/4 号/哨兵四个有效位，工程和空中是保留位。
 
 验收口径（肥鱼大总管定）：
-- 连续 10 秒无信号 → 帧率仍 ≥4.8Hz，且每车写 (0,0)
+- 连续 10 秒无信号 → 帧率仍 ≥4.7Hz（默认值 4.7 Hz，不贴 5 Hz 上限），且每车写 (0,0)
 - 断流 0.6 秒 → ``drop`` 策略下发 (0,0)，``send_stale`` 下发旧值
 """
 
@@ -153,8 +153,8 @@ def test_rate_is_clamped_to_the_protocol_ceiling():
 
 
 def test_silence_keeps_sending_at_the_nominal_rate_with_all_zeros():
-    """验收 1：连续 10 秒没有任何输入，帧率仍 ≥4.8Hz，每车 (0,0)。"""
-    sender, sent, now = collect_sender(rate_hz=4.8, own_team="R")
+    """验收 1：连续 10 秒没有任何输入，帧率仍 ≥4.7Hz（按默认值跑），每车 (0,0)。"""
+    sender, sent, now = collect_sender(rate_hz=DEFAULT_RATE_HZ, own_team="R")
     rig = Rig()
 
     # 主循环 20Hz：每 50ms 更新一次（永远是全 MISSING 的帧）
@@ -164,8 +164,9 @@ def test_silence_keeps_sending_at_the_nominal_rate_with_all_zeros():
         sender.tick()
 
     rate = sender.stats.effective_rate_hz(now["t"])
-    assert rate >= 4.8, f"10 秒静默后实际发送 {rate:.2f} Hz，低于 4.8"
-    assert sender.stats.frames_sent >= 48, f"10 秒只发了 {sender.stats.frames_sent} 帧"
+    assert rate >= 4.7, f"10 秒静默后实际发送 {rate:.2f} Hz，低于 4.7"
+    assert sender.stats.frames_sent >= 47, f"10 秒只发了 {sender.stats.frames_sent} 帧"
+    assert sender.stats.max_frames_in_window <= int(MAX_RATE_HZ), "1 秒窗口内不得超过 5 帧"
     for payload in sent:
         assert payload == bytes(PAYLOAD_LEN), "没有坐标时整帧都必须是 (0,0)"
 
