@@ -58,7 +58,7 @@ PYTHONNOUSERSITE=1 .venv/bin/python -m pytest -q     # 680 passed, 1 skipped
 ## 1. 合成基线
 
 ```zsh
-.venv/bin/python tools/iq_synth.py --out out/iq/synth_10s.c64 --seconds 10
+.venv/bin/python tools/iq_synth.py --out out/iq/synth_10s.c64 --seconds 10 --protocol 2027
 ```
 
 - 符号率 = `samp_rate / sps` = 1e6 / 47 ≈ **21.28 kBd**
@@ -73,9 +73,9 @@ PYTHONNOUSERSITE=1 .venv/bin/python -m pytest -q     # 680 passed, 1 skipped
 ## 2. 回放一段 IQ
 
 ```zsh
-.venv/bin/python tools/radio_replay.py --iq out/iq/synth_10s.c64
-.venv/bin/python tools/radio_replay.py --iq rec.c64 --set loop_bw=0.002 --interfere
-.venv/bin/python tools/radio_replay.py --iq rec.c64 --live      # 边跑边看（会丢尾巴）
+.venv/bin/python tools/radio_replay.py --iq out/iq/synth_10s.c64 --protocol 2027
+.venv/bin/python tools/radio_replay.py --iq rec.c64 --protocol 2027 --set loop_bw=0.01 --interfere
+.venv/bin/python tools/radio_replay.py --iq rec.c64 --protocol 2027 --live   # 边跑边看（会丢尾巴）
 ```
 
 输出是两路的三级计数：
@@ -106,7 +106,7 @@ info     比特   200013 | 空口帧    913 | 序列帧    484 | 业务包    48
 ## 4. 扫参数
 
 ```zsh
-.venv/bin/python tools/radio_sweep.py --mode synth \
+.venv/bin/python tools/radio_sweep.py --mode synth --protocol 2027 \
     --snr 0,5,8,10,12,14,16,18,20,25,30 \
     --loop-bw 0.002,0.005,0.01,0.02 \
     --bt 0.25,0.35,0.4,0.45,0.5 \
@@ -121,6 +121,13 @@ info     比特   200013 | 空口帧    913 | 序列帧    484 | 业务包    48
 ```
 
 有真实录制时用 `--mode file --iq rec.c64`，`--snr` 表示在录制上**附加**噪声。
+
+### 协议版本必须显式传
+
+回放工具（`radio_replay.py` / `radio_sweep.py`）**不接受 `auto`**：同一段
+录制会被反复跑，半年后没人分得清那份统计是 2026 还是 2027 的口径。合成
+信号的业务包长度也跟着 `--protocol` 走（`0x0A04` 12B、`0x0A05` 47B 是
+2027 的），版本对不上会直接判成全不合法、统计归零。
 
 ### 指标口径
 
@@ -152,14 +159,23 @@ info     比特   200013 | 空口帧    913 | 序列帧    484 | 业务包    48
 
 **各轴最优区间**
 
-| 参数 | 当前值 | 均值 包/kbit | 结论 |
-| --- | --- | --- | --- |
-| `loop_bw` | 0.005 | 0.85 | 偏慢。0.01 / 0.02 都是 0.89，比当前高约 5%；0.002 掉到 0.73 |
-| `bt` | 0.35 | 1.07 | 已经接近最优。0.35~0.45 打平（1.07~1.09），0.5 略降，0.25 **完全打不开眼** |
+| 参数 | 改前 | 改后 | 220 点均值 | 结论 |
+| --- | --- | --- | --- | --- |
+| `loop_bw` | 0.005 | **0.01** | 0.85 → 0.89 包/kbit | 有数据支撑的改动，已落到 `.grc` 默认值 |
+| `bt` | 0.35 | 0.35 | 1.07（0.4 是 1.09） | 已经在平台上（0.35~0.45 打平），不动 |
 
-结论：**`loop_bw` 从 0.005 提到 0.01，`bt` 保持 0.35**。前者是唯一有数据
-支撑的改动，后者是已经站在平台上，不用动。`bt=0.25` 那种"窄一点少进噪声"
-的直觉在这个波形上完全失效（同步率 <8%）。
+各轴逐点均值（同一批 220 个参数点）：
+
+| 轴 | 取值 → 均值（包/kbit） |
+| --- | --- |
+| SNR | 0→0.00、5→0.00、8→0.00、10→0.04、12→0.21、14→0.72、16→1.29、18→1.58、20→1.75、25→1.81、30→1.84 |
+| `loop_bw` | 0.002→0.73、0.005→0.85、0.01→0.89、0.02→0.89 |
+| `bt` | 0.25→0.00、0.35→1.07、0.4→1.09、0.45→1.08、0.5→0.97 |
+
+**`loop_bw` 已经改成 0.01**（`.grc` 里的变量备注写了依据）。但这条改动
+**只经过合成信号验证**，还差一次真实 2027 信号复测才算定稿：5% 的提升在
+低 SNR 边缘很可能被模型误差吃掉，复测时要重点看 14~18 dB 那一段。
+`bt=0.25` 那种"窄一点少进噪声"的直觉在这个波形上完全失效（同步率 <8%）。
 
 ## 局限（写报告时必须一起说）
 

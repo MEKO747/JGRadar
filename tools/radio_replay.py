@@ -47,6 +47,7 @@ for _path in (ROOT, RADIO_PACKAGE):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
+from rmuc.coder import PROTOCOL_2027, SUPPORTED_PROTOCOLS  # noqa: E402
 from rmuc.constants import WaveType  # noqa: E402
 from tools.radio_probe import ChannelStats  # noqa: E402
 
@@ -448,12 +449,18 @@ def decode_bit_files(
     bit_files: dict[str, str | Path],
     *,
     channels: tuple[str, ...] = (WaveType.INFO.value,),
+    protocol: str = PROTOCOL_2027,
     chunk_bytes: int = 65536,
 ) -> dict[str, ChannelStats]:
-    """把落盘的比特流喂进接收包自己的解码器，统计三级计数。"""
+    """把落盘的比特流喂进接收包自己的解码器，统计三级计数。
+
+    ``protocol`` 必须显式给：回放会把一段录制反复跑，半年后没人分得清
+    当时的统计是哪个赛季的口径，所以这里不接受 ``auto``。
+    """
+    _require_protocol(protocol)
     stats = {}
     for wave in channels:
-        counter = ChannelStats(WaveType(wave))
+        counter = ChannelStats(WaveType(wave), protocol=protocol)
         path = Path(bit_files[wave])
         if path.is_file():
             with open(path, "rb") as handle:
@@ -477,8 +484,10 @@ def run_replay_file(
     python: str | None = None,
     repeat: bool = False,
     channels: tuple[str, ...] = (WaveType.INFO.value,),
+    protocol: str = PROTOCOL_2027,
 ) -> CaptureResult:
     """派生 → 编译 → 满速跑完 → 离线解码。默认的单点流程。"""
+    _require_protocol(protocol)
     created = work_dir is None
     work_dir = Path(work_dir) if work_dir else Path(tempfile.mkdtemp(prefix="jg_radio_replay_"))
     try:
@@ -498,7 +507,7 @@ def run_replay_file(
             raise ReplayError(
                 f"回放流图异常退出（code={process.returncode}）：{(stderr or '')[-800:]}"
             )
-        stats = decode_bit_files(bit_files, channels=channels)
+        stats = decode_bit_files(bit_files, channels=channels, protocol=protocol)
         return CaptureResult(
             stats=stats,
             seconds=seconds,
@@ -656,6 +665,7 @@ def replay_once(
     repeat: bool = False,
     channels: tuple[str, ...] = (WaveType.INFO.value,),
     live: bool = False,
+    protocol: str = PROTOCOL_2027,
 ) -> CaptureResult:
     """单点回放。`live=True` 走 ZMQ 旁听，否则满速跑完再离线解码。"""
     if not live:
@@ -669,6 +679,7 @@ def replay_once(
             python=python,
             repeat=repeat,
             channels=channels,
+            protocol=protocol,
         )
 
     created = work_dir is None
@@ -695,9 +706,18 @@ def replay_once(
             shutil.rmtree(work_dir, ignore_errors=True)
 
 
-def format_counts(result: CaptureResult) -> str:
+def _require_protocol(protocol: str) -> str:
+    """回放工具不许用 auto：口径必须由调用方写死。"""
+    if protocol not in SUPPORTED_PROTOCOLS:
+        raise ReplayError(
+            f"回放必须显式指定协议版本，收到 {protocol!r}；可用 {list(SUPPORTED_PROTOCOLS)}"
+        )
+    return protocol
+
+
+def format_counts(result: CaptureResult, *, protocol: str = PROTOCOL_2027) -> str:
     """把一次回放的结果整理成几行文本。"""
-    lines = []
+    lines = [f"协议版本 {protocol}（显式指定，未用 auto）"]
     for wave, item in result.stats.items():
         sync_rate = item.frames / item.sync if item.sync else 0.0
         lines.append(
@@ -721,6 +741,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seconds", type=float, default=10.0, help="录制时长，秒")
     parser.add_argument("--samp-rate", type=float, default=None, help="录制采样率，默认沿用流图")
     parser.add_argument("--sdr-uri", default=None, help="PlutoSDR 地址，默认沿用流图")
+    parser.add_argument("--protocol", required=True, choices=SUPPORTED_PROTOCOLS,
+                        help="按哪个赛季的协议解释业务包；回放工具强制显式传，不接受 auto")
     parser.add_argument("--bits", type=int, default=400_000,
                         help="旁听模式下的停止条件（落盘模式忽略，按文件长度算）")
     parser.add_argument("--timeout", type=float, default=120.0, help="单点墙钟上限，秒")
@@ -775,6 +797,7 @@ def main(argv: list[str] | None = None) -> int:
         repeat=args.repeat,
         channels=channels,
         live=args.live,
+        protocol=args.protocol,
     )
 
     if args.json:

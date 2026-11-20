@@ -27,6 +27,7 @@ from tools.radio_replay import (
     derive_record_flowgraph,
     derive_replay_flowgraph,
     load_flowgraph,
+    run_replay_file,
     variable_values,
 )
 
@@ -203,6 +204,14 @@ def test_decode_bit_files_counts_all_three_stages(tmp_path):
     stats = decode_bit_files({WaveType.INFO.value: path}, channels=(WaveType.INFO.value,))
     info = stats[WaveType.INFO.value]
     assert (info.sync, info.frames, info.decoded) == (1, 1, 1)
+
+
+def test_replay_refuses_auto_protocol():
+    """回放工具不许用 auto：一段录制会被反复跑，口径必须写死。"""
+    with pytest.raises(ReplayError, match="显式指定协议版本"):
+        decode_bit_files({WaveType.INFO.value: Path("unused.bin")}, protocol="auto")
+    with pytest.raises(ReplayError, match="显式指定协议版本"):
+        run_replay_file("unused.c64", protocol="auto")
 
 
 def test_decode_bit_files_tolerates_missing_file(tmp_path):

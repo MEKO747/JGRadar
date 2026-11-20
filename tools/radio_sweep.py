@@ -166,6 +166,7 @@ def evaluate_point(
     timeout: float,
     serial_frames_per_air: float | None = None,
     frame_period_symbols: int = FRAME_BITS,
+    protocol: str = "2027",
 ) -> SweepRow:
     """跑一个参数点，返回计数。"""
     result = replay_once(
@@ -173,6 +174,7 @@ def evaluate_point(
         overrides=point.overrides(),
         target_bits=target_bits,
         timeout=timeout,
+        protocol=protocol,
     )
     info = result.info
     return SweepRow(
@@ -409,6 +411,7 @@ def build_report(
     """生成 markdown 报告：结论、数据、曲线、方法与局限。"""
     lines = [f"# {meta.get('title', '解调参数扫描报告')}", ""]
     lines.append(f"- 数据源：{meta.get('source', '未知')}")
+    lines.append(f"- 协议版本：{meta.get('protocol', '未知')}（显式指定，未用 auto）")
     lines.append(f"- 符号率：{meta.get('symbol_rate', 0) / 1000:.2f} kBd，"
                  f"每符号 {meta.get('sps', 0)} 采样")
     lines.append(f"- 每点收集：{meta.get('bits', 0)} 比特，共 {len(rows)} 个参数点")
@@ -558,6 +561,7 @@ def prepare_inputs(args: argparse.Namespace, out_dir: Path) -> dict:
             seconds=args.seconds,
             seed=args.seed,
             frames=frames,
+            protocol=args.protocol,
         )
         signal = synthesize(spec)
         clean = signal.samples
@@ -584,6 +588,7 @@ def prepare_inputs(args: argparse.Namespace, out_dir: Path) -> dict:
         "sps": args.sps,
         "symbol_rate": args.samp_rate / args.sps,
         "bits": args.bits,
+        "protocol": args.protocol,
         "mod_index": args.mod_index if spec else None,
         "deviation_hz": (args.mod_index * args.samp_rate / args.sps / 2.0) if spec else None,
         "serial_frames_per_air": (signal.serial_frames / signal.frames) if spec else None,
@@ -667,6 +672,8 @@ def write_meta(meta: dict, out_dir: Path) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--mode", choices=("synth", "file"), default="synth")
+    parser.add_argument("--protocol", required=True, choices=("2026", "2027"),
+                        help="按哪个赛季的协议造包与解码；回放工具强制显式传，不接受 auto")
     parser.add_argument("--iq", type=Path, help="真实录制的 IQ 文件（complex64）")
     parser.add_argument("--out", type=Path, default=None, help="输出目录（--rebuild 时不需要）")
     parser.add_argument("--snr", type=_parse_floats, default=DEFAULT_SNR,
@@ -734,6 +741,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
             serial_frames_per_air=serial_per_air,
             frame_period_symbols=meta["frame_period_symbols"],
+            protocol=args.protocol,
         )
         rows.append(row)
         print(

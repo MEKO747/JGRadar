@@ -35,7 +35,7 @@ RADIO_PACKAGE = ROOT / "radio" / "radar_parse_em_wave"
 if str(RADIO_PACKAGE) not in sys.path:
     sys.path.insert(0, str(RADIO_PACKAGE))
 
-from rmuc.coder import SOF, crc8, crc16  # noqa: E402
+from rmuc.coder import PROTOCOL_2026, PROTOCOL_2027, SOF, crc8, crc16  # noqa: E402
 from rmuc.constants import (  # noqa: E402
     ACCESS_CODES,
     AIR_FRAME_LEN,
@@ -77,25 +77,77 @@ def serial_frame(cmd_id: int, payload: bytes) -> bytes:
     return frame + crc16(frame).to_bytes(2, "little")
 
 
-def default_packets(rng: np.random.Generator, count: int) -> list[tuple[int, bytes]]:
-    """造一批合法的业务包，循环覆盖 6 类命令字。
+def default_packets(
+    rng: np.random.Generator,
+    count: int,
+    *,
+    protocol: str = PROTOCOL_2027,
+) -> list[tuple[int, bytes]]:
+    """造一批合法的业务包，循环覆盖各类命令字。
 
-    数值按 2026 场地边界（2800 × 1500）和常见血量/弹量范围取，保证下游
-    桥接不会把坐标当成越界值丢弃。
+    载荷长度**必须和赛季一致**：2027 的 `0x0A04` 是 12 字节、`0x0A05` 是
+    47 字节，拿 2026 的 8/41 字节去跑显式 2027 解码会被判不合法，统计直接
+    归零。所以合成信号的版本和回放解码的版本是同一个参数。
+
+    数值按场地边界（2800 × 1500）和常见血量/弹量范围取，保证下游桥接不会
+    把坐标当成越界值丢弃；保留位一律写 0。
     """
-    packets: list[tuple[int, bytes]] = []
+    if protocol not in (PROTOCOL_2026, PROTOCOL_2027):
+        raise ValueError(f"未知协议版本 {protocol!r}；应为 {PROTOCOL_2026}/{PROTOCOL_2027}")
+
+    def positions() -> bytes:
+        values = rng.integers(0, 1500, 12)
+        if protocol == PROTOCOL_2027:
+            # 2027 只下发重装/3/4/哨兵，工程(2,3)与空中(8,9)是保留位
+            for index in (2, 3, 8, 9):
+                values[index] = 0
+        return struct.pack("<12h", *values)
+
+    def hp() -> bytes:
+        values = rng.integers(0, 500, 6)
+        if protocol == PROTOCOL_2027:
+            values[1] = 0                 # 工程变保留位
+        values[4] = 0                     # 两代的 5 号槽都未命名
+        return struct.pack("<6H", *values)
+
+    def ammo() -> bytes:
+        values = rng.integers(0, 350, 5)
+        if protocol == PROTOCOL_2027:
+            values[3] = 0                 # 空中变保留位
+        return struct.pack("<5H", *values)
+
+    def field() -> bytes:
+        if protocol == PROTOCOL_2027:
+            return struct.pack("<HHII", *rng.integers(0, 900, 2), 0x0ABC, 0x03FF)
+        return struct.pack("<HHI", *rng.integers(0, 900, 3))
+
+    def buff() -> bytes:
+        if protocol == PROTOCOL_2027:
+            payload = bytearray(47)
+            for index, offset in enumerate((0, 14, 21, 28)):
+                struct.pack_into("<BHBBH", payload, offset,
+                                 int(rng.integers(0, 4)), int(rng.integers(0, 40)),
+                                 int(rng.integers(0, 3)), int(rng.integers(0, 3)),
+                                 int(rng.integers(0, 40)))
+            payload[35] = int(rng.integers(1, 7))      # 哨兵姿态
+            payload[36] = int(rng.integers(0, 4))      # 重装状态
+            payload[38] = int(rng.integers(0, 4))      # 3 号步兵状态
+            payload[39] = int(rng.integers(0, 4))      # 4 号步兵状态
+            payload[40] = int(rng.integers(0, 4))      # 哨兵状态
+            struct.pack_into("<HHH", payload, 41, 800, 600, 250)  # 加固区域 mm
+            return bytes(payload)
+        # 2026 的 41 字节版本：5×(B H B B H) + 哨兵姿态(1B) + 5 个机器人状态(5B)
+        return struct.pack("<" + "BHBBH" * 5 + "B" + "B" * 5,
+                           *rng.integers(0, 4, 31).tolist())
+
     builders = (
-        lambda: (CMD_ROBOT_POSITION, struct.pack("<12h", *rng.integers(0, 1500, 12))),
-        lambda: (CMD_ROBOT_HP, struct.pack("<6H", *rng.integers(0, 500, 6))),
-        lambda: (CMD_ROBOT_AMMO, struct.pack("<5H", *rng.integers(0, 350, 5))),
-        lambda: (CMD_FIELD_STATUS, struct.pack("<HHI", *rng.integers(0, 900, 3))),
-        # 41 字节版本：5×(B H B B H) + 哨兵姿态(1B) + 5 个机器人状态(5B)
-        lambda: (CMD_ROBOT_BUFF, struct.pack("<" + "BHBBH" * 5 + "B" + "B" * 5,
-                                             *rng.integers(0, 4, 31).tolist())),
+        lambda: (CMD_ROBOT_POSITION, positions()),
+        lambda: (CMD_ROBOT_HP, hp()),
+        lambda: (CMD_ROBOT_AMMO, ammo()),
+        lambda: (CMD_FIELD_STATUS, field()),
+        lambda: (CMD_ROBOT_BUFF, buff()),
     )
-    for index in range(count):
-        packets.append(builders[index % len(builders)]())
-    return packets
+    return [builders[index % len(builders)]() for index in range(count)]
 
 
 def air_frames(stream: bytes, wave: WaveType = WaveType.INFO) -> list[bytes]:
@@ -160,6 +212,8 @@ class SynthSpec:
     mod_index: float = DEFAULT_MOD_INDEX
     seconds: float = 6.0
     wave: WaveType = WaveType.INFO
+    #: 业务包按哪个赛季的布局造；回放解码必须用同一个值。
+    protocol: str = PROTOCOL_2027
     seed: int = 20261120
     #: 指定空口帧数时优先于 `seconds`，用于让样本数正好覆盖一个测量窗口。
     frames: int | None = None
@@ -211,6 +265,7 @@ class SynthSignal:
             "frames": self.frames,
             "serial_frames": self.serial_frames,
             "wave": self.spec.wave.value,
+            "protocol": self.spec.protocol,
             "frame_period_symbols": self.spec.frame_period_symbols,
         }
 
@@ -230,7 +285,7 @@ def synthesize(spec: SynthSpec | None = None) -> SynthSignal:
         frame_count = max(1, int(round(spec.samples_for_seconds() / period_samples)))
     usable = frame_count * AIR_PAYLOAD_LEN
 
-    packets = default_packets(rng, frame_count * 2 + 2)
+    packets = default_packets(rng, frame_count * 2 + 2, protocol=spec.protocol)
     stream = bytearray()
     complete = 0
     for cmd_id, payload in packets:
@@ -316,6 +371,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mod-index", type=float, default=DEFAULT_MOD_INDEX,
                         help=f"调制指数 h，默认 {DEFAULT_MOD_INDEX}")
     parser.add_argument("--wave", choices=("info", "interfere"), default="info")
+    parser.add_argument("--protocol", choices=(PROTOCOL_2026, PROTOCOL_2027),
+                        default=PROTOCOL_2027,
+                        help=f"业务包按哪个赛季的布局造，默认 {PROTOCOL_2027}")
     args = parser.parse_args(argv)
 
     spec = SynthSpec(
@@ -325,6 +383,7 @@ def main(argv: list[str] | None = None) -> int:
         mod_index=args.mod_index,
         seconds=args.seconds,
         wave=WaveType(args.wave),
+        protocol=args.protocol,
     )
     signal = synthesize(spec)
     path = write_iq(args.out, signal.samples)

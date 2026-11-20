@@ -162,3 +162,42 @@ def test_iq_file_round_trip(tmp_path):
     loaded = read_iq(path)
     assert np.array_equal(loaded, signal.samples)
     assert loaded.dtype == np.complex64
+
+
+def test_packet_lengths_follow_the_requested_protocol():
+    """2026/2027 的 0x0A04、0x0A05 长度不同，合成时必须跟着版本走。"""
+    from rmuc.coder import PROTOCOL_2026, PROTOCOL_2027
+
+    def lengths(protocol: str) -> dict[int, set[int]]:
+        rng = np.random.default_rng(3)
+        packets = default_packets(rng, 40, protocol=protocol)
+        table: dict[int, set[int]] = {}
+        for cmd_id, payload in packets:
+            table.setdefault(cmd_id, set()).add(len(payload))
+        return table
+
+    assert lengths(PROTOCOL_2027)[0x0A04] == {12}
+    assert lengths(PROTOCOL_2027)[0x0A05] == {47}
+    assert lengths(PROTOCOL_2026)[0x0A04] == {8}
+    assert lengths(PROTOCOL_2026)[0x0A05] == {41}
+
+
+def test_unknown_protocol_is_rejected():
+    with pytest.raises(ValueError, match="未知协议版本"):
+        default_packets(np.random.default_rng(0), 3, protocol="1999")
+
+
+def test_2027_packets_pass_an_explicit_2027_decode():
+    """合成信号和回放解码用同一个版本时，业务层必须全部认得出。"""
+    from rmuc.coder import PROTOCOL_2027
+
+    rng = np.random.default_rng(5)
+    packets = default_packets(rng, 20, protocol=PROTOCOL_2027)
+    serial = SerialFrameDecoder()
+    decoded = []
+    for cmd_id, payload in packets:
+        frame = serial_frame(cmd_id, payload)
+        for parsed in serial.feed(frame):
+            assert BusinessDecoder.decode(parsed, protocol=PROTOCOL_2027) is not None
+            decoded.append(cmd_id)
+    assert len(decoded) == len(packets)
