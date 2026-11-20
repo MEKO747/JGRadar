@@ -91,6 +91,16 @@
 其余六项通过。另有一处语义偏差已由本文件放开：标定四项实际放在
 `checks[vision_calibration].value` 里，语义完整，不再要求搬去顶层。
 
+**两处已于 `2d64058` 修复并复核**：`operator` 走 `--operator` → `git config user.name` → `"unset"` 回退链
+（并记 `operator_source`，`git` 只代表仓库主人、不代表现场操作者）；复现命令只拼生效参数、
+解释器写实际跑起来的 `.venv/bin/python`（本机没有 `python`）。修复后基线复跑 **14/14 通过**（见台账 R24）。
+
+**标定 caveat 是条件性的**：只有当 `vision_calibration` 被判 `pass` 或 `fail` 时才要求出现
+「配置合格 ≠ 真机标定做过；A 级签核补这一层」；`blocked` 时没有判定可收窄，硬加只是噪音。
+
+**退出码**：工具在 `verdict != pass` 时返回 1（含 `blocked`），这是「未通过」而非崩溃；
+CI/脚本请按非零=未通过处理，不要当成执行失败。
+
 ## 5. 现在就该能跑出来的东西（无设备基线）
 
 设备不在位时，工具应当输出 `verdict: "blocked"`、四项全 `blocked`、`evidence_grade: "D"`（或合成输入跑通时为 `C`），
