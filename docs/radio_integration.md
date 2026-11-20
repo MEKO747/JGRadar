@@ -64,6 +64,13 @@ python3 tools/radio_probe.py --mode watch   # 打印解出的业务包内容
 Access Code 允许 5 bit 误码，所以「帧同步」这一级本身偏宽松；判断信号
 好坏要看后两级的通过率。
 
+## 调参：离线回放与参数扫描
+
+`tools/iq_synth.py` 合成或 `tools/radio_replay.py --record` 录制一段 IQ，
+`tools/radio_replay.py` 用**签入流图本身**（只换源块）回放，`tools/radio_sweep.py`
+在同一段信号上扫 `loop_bw` / `bt`，输出 CSV、曲线和报告。原理、指标口径和
+基线结论见 [解调参数调优](radio_tuning.md)。
+
 ## ROS 2 消息和融合坐标
 
 | 接收话题 | 内容 | JGRadar 用途 |
