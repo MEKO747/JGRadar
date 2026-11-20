@@ -116,6 +116,41 @@ pip install "onnx==1.18.0" "numpy==1.26.4"   # 1.18 只要求 numpy>=1.22，与 
   包含这部分，属于当前真实状态，不是测量误差。
 - 单模型路径与 e2e 路径现在同口径都有 `fell_back_to_cpu`。
 
+## 5.2 装甲模型那 201 个 CPU 节点：根因是 **batch 动态**，不是 H/W
+
+`provider_nodes` 报出装甲模型 520 个节点在 GPU、201 个在 CPU，全部落在
+`/model.6/.../attn/` 的 `Gather/Unsqueeze/Slice/Concat` 形状算子里。做了三组对照
+（同一份 bench、同一条级联、同样的 6 / 10 个 ROI）：
+
+| 模型变体 | 输入 | armor 节点 | 6 ROI | 10 ROI |
+| --- | --- | --- | --- | --- |
+| 现状 `armor_best.onnx` | `batch×3×high×wide`（全动态） | CUDA 520 / **CPU 201** | **10.2 ms** | **16.5 ms** |
+| 固定 H/W、batch 动态 | `batch×3×192×192` | CUDA 520 / **CPU 201** | 10.2 ms | 16.6 ms |
+| 固定 H/W + 固定 batch=1 | `1×3×192×192` | CUDA 422 / **CPU 0** | **35.2 ms** | **51.2 ms** |
+
+结论：
+
+1. **只固定 H/W 完全没用**——CPU 节点数不变、耗时在噪声内（10.2 vs 10.2，16.5 vs 16.6）。
+2. **形状算子是被动态 batch 拖住的**：一旦把 batch 固定成 1，CPU 节点归零（和
+   admin 单独测到的 `CUDA 422 / CPU 0` 对得上），但**批处理也被一起废掉**：
+   `OnnxBackend` 发现 `_batch_size == 1` 就逐张推理，6 个 ROI 变 3.4 倍慢、10 个 3.1 倍慢。
+3. 所以**维持现状**：201 个形状算子的代价远小于丢掉批处理的代价。要真优化就固定
+   H/W 的同时**保留动态 batch**——但那等于什么都不改（第 2 行）。
+
+派生模型（不进 git，实验用，**未启用**）：
+
+```zsh
+.venv/bin/python tools/fix_onnx_shape.py \
+    --model /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/armor/armor_best.onnx \
+    --out   /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/armor/armor_best_fixed192.onnx \
+    --size 192
+# 源 sha256 463229640be82dc865f9bcf3199de9deb7a106831745dd3cd3a54c440b8de3de
+# 派生 sha256 061534f0c77c8aba0b87d56c7e8693eef3d42677511700c99bbeb17033ca36b2
+```
+
+固定 batch 的对照模型用 `--fixed-batch 1` 生成（sha256 `a0062c54…`），只用于这次实验，
+没有保留在权重目录里。
+
 ## 6. 复现命令
 
 ```zsh

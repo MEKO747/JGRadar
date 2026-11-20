@@ -115,11 +115,18 @@ def _timeit(fn, iters: int):
     return (time.perf_counter() - started) / iters * 1000, result
 
 
-def bench_e2e(cfg_paths, *, video: str, resize: str, rois: int, iters: int) -> dict:
+def bench_e2e(cfg_paths, *, video: str, resize: str, rois: int, iters: int,
+              armor_model: str = "") -> dict:
+    import dataclasses
+
     from jg_radar.config import load_config
     from jg_radar.detect.factory import build_cascade
 
     cfg = load_config(*cfg_paths)
+    if armor_model:
+        # 派生模型对比（例如固定 H/W）：只换路径，其余配置不动
+        cfg = dataclasses.replace(cfg, detect=dataclasses.replace(
+            cfg.detect, armor_model=armor_model))
     cascade = build_cascade(cfg.detect)
     cascade.load()
     frame = _read_frame(video, resize)
@@ -185,6 +192,8 @@ def bench_e2e(cfg_paths, *, video: str, resize: str, rois: int, iters: int) -> d
         "cars": len(cars),
         "armor_ms": round(armor_ms, 1),
         "armor_rois": len(boxes),
+        "armor_model": str(getattr(cfg.detect, "armor_model", "")),
+        "armor_capacity": int(getattr(cascade.armor, "capacity", 0) or 0),
         "synthetic_rois": synthetic,
         "armor_hits": len(armors),
         "digit": digit,
@@ -228,6 +237,7 @@ def main(argv=None) -> int:
     parser.add_argument("--resize", default="", help="e2e 时把帧缩放到 WxH，例如 1280x1024")
     parser.add_argument("--rois", type=int, default=6, help="e2e 无检测时补几个 ROI")
     parser.add_argument("--out", default="", help="把结果 JSON 存到该目录（文件名带时间戳）")
+    parser.add_argument("--armor-model", default="", help="e2e 时覆盖装甲模型路径（对比派生模型用）")
     args = parser.parse_args(argv)
 
     if args.e2e:
@@ -237,7 +247,7 @@ def main(argv=None) -> int:
         print(json.dumps({"available_providers": ort.get_available_providers(),
                           "cudnn": preload}, ensure_ascii=False))
         result = bench_e2e(args.config, video=args.video, resize=args.resize,
-                           rois=args.rois, iters=args.iters)
+                           rois=args.rois, iters=args.iters, armor_model=args.armor_model)
         result["preload"] = preload
         print(json.dumps(result, ensure_ascii=False))
         _maybe_write(args.out, "e2e", result)
