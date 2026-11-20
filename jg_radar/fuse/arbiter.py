@@ -249,6 +249,24 @@ class SlotDecision:
     排在最后、带默认值：``SlotDecision`` 已经被测试按位置构造过，
     往中间插字段会静默地改变那些调用的含义。
     """
+    source: SourceKind | None = None
+    """这条坐标是**哪个源**给的。``tier`` 说"按什么规矩采信它"，
+    这里说"数据本身来自谁"——0x0305 发送端要按源分别记账。"""
+    age_s: float | None = None
+    """这条坐标的信息年龄（秒）：``now - sample.observed_at``。
+
+    预测态的 ``observed_at`` 刻意停在最后一次真观测上，所以它的年龄会随
+    预测时长一起涨——那是**故意的**：从规则的角度看，这段时间确实"没收到
+    数据"。要用"预测本身是否可信"，请看 ``is_predicted`` 和
+    ``error_bound_cm``，不要看这个年龄。
+    """
+    stale: bool = False
+    """信息年龄是否已到 ``cfg.stale_mark_s``。
+
+    **只标记，不否决**：``stale=True`` 的样本照常上报，是否因为太旧而丢掉
+    由精度上界决定（``max_position_error_cm`` / 速度 = 1.0 秒）。这样
+    "0.5 秒没数据"和"1.0 秒没数据"就是两件看得见的事，而不是一刀切。
+    """
 
     @property
     def empty(self) -> bool:
@@ -425,6 +443,7 @@ class Arbiter:
                     name=name, sample=best.sample, tier=previous,
                     previous_tier=previous, switched=False,
                     error_bound_cm=best_bound,
+                    **self._sample_fields(best.sample, now=now),
                 )
             return self._adopt(
                 name, state, best_tier, best, bound=best_bound,
@@ -506,6 +525,7 @@ class Arbiter:
             error_bound_cm=position_error_bound_cm(
                 incumbent, now=now, cfg=self.cfg
             ),
+            **self._sample_fields(incumbent, now=now),
         )
 
     def _adopt(
@@ -531,9 +551,26 @@ class Arbiter:
         return SlotDecision(
             name=name, sample=stamped.sample, tier=tier, previous_tier=previous,
             switched=switched, error_bound_cm=bound,
+            **self._sample_fields(stamped.sample, now=now),
         )
 
     # -- 工具 -------------------------------------------------------------
+    def _sample_fields(self, sample: SourceSample | None, *, now: float) -> dict:
+        """算 ``source`` / ``age_s`` / ``stale`` 三个字段。
+
+        三处构造点共用一份，避免"选出来的"和"报出去的"不是同一个年龄——
+        年龄算两遍是这类代码最容易出错的地方（一处传错 ``now``，报出去的
+        新鲜度就和判断时用的不是同一个数）。
+        """
+        if sample is None:
+            return {"source": None, "age_s": None, "stale": False}
+        age = max(0.0, float(now) - float(sample.observed_at))
+        return {
+            "source": sample.source,
+            "age_s": age,
+            "stale": age >= float(self.cfg.stale_mark_s),
+        }
+
     @staticmethod
     def _position(sample: SourceSample | None) -> tuple[float, float] | None:
         if sample is None or sample.position_cm is None:

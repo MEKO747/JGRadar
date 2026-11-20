@@ -179,7 +179,7 @@ def test_radio_fresh_takes_over_after_the_dwell():
         seen.append(d.tier)
 
     first_radio = seen.index("radio_fresh") * DT + DT
-    assert 0.25 <= first_radio <= 0.40, f"接管时刻 {first_radio}s 超出 dwell_s=0.3 的预期"
+    assert 0.20 <= first_radio <= 0.30, f"接管时刻 {first_radio}s 超出 dwell_s=0.2 的预期"
     assert seen[-1] == "radio_fresh"
     assert arb.switch_count == 1
 
@@ -200,8 +200,8 @@ def test_a_demoted_challenger_must_restart_its_dwell():
     t = 0.0
     arb.decide([stamped(sample("R1", 1000, 700, observed_at=t), t)], now=t)
 
-    # radio_fresh 攒 0.25s —— 离 dwell_s=0.3 还差一点
-    for _ in range(5):
+    # radio_fresh 攒 0.10s —— 离 dwell_s=0.2 还差一半
+    for _ in range(3):
         t += DT
         d = arb.decide([stamped(sample("R1", 1000, 700, observed_at=t), t),
                         stamped(radio("R1", 1010, 700, observed_at=t), t)], now=t)["R1"]
@@ -213,7 +213,7 @@ def test_a_demoted_challenger_must_restart_its_dwell():
                 stamped(radio("R1", 1010, 700, observed_at=t - 0.5), t)], now=t)
     assert arb.vetoed == 0
 
-    # 立刻恢复 fresh。旧计时若被留下，此刻已经 0.30s ≥ dwell_s，会当场接管。
+    # 立刻恢复 fresh。旧计时若被留下，此刻已经 0.20s ≥ dwell_s，会当场接管。
     t += DT
     d = arb.decide([stamped(sample("R1", 1000, 700, observed_at=t), t),
                     stamped(radio("R1", 1010, 700, observed_at=t), t)], now=t)["R1"]

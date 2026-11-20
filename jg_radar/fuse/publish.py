@@ -59,6 +59,20 @@ class PublishLayer:
             "filled_missing": float(filled),
             "unknown_slots": float(unknown),
         }
+        # 每个槽位的信息年龄和 stale 标记单独摊开：``RobotSlotOutput`` 的
+        # 契约已经带了 ``source`` 和 ``observed_at``，年龄可以从两者算出来，
+        # 但"算得出来"和"一眼看得见"是两件事——将来按规则记错的 0x0305
+        # 发送端要的就是这一眼。
+        stale_slots = 0
+        for name, decision in decisions.items():
+            if name not in robots or decision is None:
+                continue
+            if decision.age_s is not None:
+                diag[f"{name}_age_s"] = float(decision.age_s)
+            if decision.stale:
+                stale_slots += 1
+                diag[f"{name}_stale"] = 1.0
+        diag["stale_slots"] = float(stale_slots)
         if diagnostics:
             diag.update({k: float(v) for k, v in diagnostics.items()})
 

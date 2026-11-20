@@ -276,8 +276,26 @@ class FuseConfig:
     radio_fresh_s: float = 0.2
     radio_stale_s: float = 10.0
     vision_watchdog_s: float = 0.5
-    dwell_s: float = 0.3
-    """挑战者必须连续满足条件的时长。"""
+    dwell_s: float = 0.2
+    """挑战者必须连续满足条件的时长。
+
+    和 ``radio_fresh_s`` 相加就是一次换源的等效延迟：0.2 + 0.2 = 0.4 秒。
+    上一版是 0.3，等效 0.5 秒，正好卡在"每累计 0.5 秒收不到数据记一次错误"
+    这条规则的边界上，零余量；而同类队伍的做法都是当帧生效、没有驻留，
+    取 0.2 已经在两者之间留了余量。
+    """
+    stale_mark_s: float = 0.5
+    """信息年龄到这一刻起，决策标 ``stale=True``。
+
+    这是**标记**，不是否决：``stale`` 的样本照常上报，只是把自己有多旧
+    写在 ``SlotDecision.age_s`` 里，让发布层和将来的 0x0305 发送端能按
+    规则自己记账。真正的否决仍是精度上界（``max_position_error_cm`` /
+    ``max_robot_speed_cm_s`` = 1.0 秒）。
+
+    取 0.5 是因为规则按"每累计 0.5 秒收不到数据"记错：标记点晚于它，
+    错误已经在裁判系统里产生而我们还没察觉；早于它太多，正常的
+    200ms 更新周期会被误标。
+    """
     switch_jump_cm: float = 150.0
     """切换时允许的最大位置跳变。"""
     reacquire_s: float = 0.8
