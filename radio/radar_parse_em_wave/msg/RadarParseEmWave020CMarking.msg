@@ -1,0 +1,10 @@
+std_msgs/Header header
+uint16 raw
+bool enemy_hero_vulnerable
+bool enemy_infantry3_vulnerable
+bool enemy_infantry4_vulnerable
+bool enemy_sentry_vulnerable
+bool own_hero_marked
+bool own_infantry3_marked
+bool own_infantry4_marked
+bool own_sentry_marked

@@ -37,6 +37,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 import struct
 import time
 from dataclasses import dataclass, field
@@ -47,8 +48,10 @@ from jg_radar.types import FIELD_MAX_X_CM, FIELD_MAX_Y_CM, FrameOutput
 #: 协议规定的发送频率上限。代码里硬夹到它，配置写大了也只按它发。
 MAX_RATE_HZ = 5.0
 
-#: 默认发送频率。学同行留 0.2 Hz 余量，不贴上限打。
-DEFAULT_RATE_HZ = 4.8
+#: 默认发送频率。4.7 Hz：相位对齐后某些 1 秒窗口仍会落满 5 帧，贴着
+#: 「频率上限 5Hz」的线上零余量；降到 4.7 的代价是达标时间约慢 2%，
+#: 但比赛里超发只会给自己惹麻烦。
+DEFAULT_RATE_HZ = 4.7
 
 #: 数据段长度（字节）。
 PAYLOAD_LEN = 48
@@ -136,6 +139,8 @@ class TxStats:
     sent_stale: dict[str, int] = field(default_factory=dict)
     #: 最近一帧里最老的那条坐标的年龄（秒）；没有坐标时为 ``None``。
     last_max_age_s: float | None = None
+    #: 任意一个 ``window_s`` 秒窗口里出现过的最多帧数。现场直接看有没有贴线。
+    max_frames_in_window: int = 0
     first_tick_at: float | None = None
     first_sent_at: float | None = None
     last_sent_at: float | None = None
@@ -159,6 +164,7 @@ class TxStats:
         return {
             "frames_sent": self.frames_sent,
             "effective_rate_hz": round(self.effective_rate_hz(now), 3),
+            "max_frames_1s": self.max_frames_in_window,
             "dropped": dict(self.dropped),
             "sent_stale": dict(self.sent_stale),
             "last_max_age_s": (
@@ -206,6 +212,8 @@ class RobotPositionSender:
         self._observed_at: dict[str, float] = {}
         self.stats = TxStats()
         self.last_payload: bytes | None = None
+        #: 最近 1 秒的发送时刻，用来数「任意 1 秒窗口最多发了几帧」。
+        self._recent_sends: deque[float] = deque()
 
     # -- 输入 -------------------------------------------------------------
     def update(self, frame: FrameOutput) -> None:
@@ -245,6 +253,12 @@ class RobotPositionSender:
         self.last_payload = payload
         self.stats.frames_sent += 1
         self.stats.last_max_age_s = max_age
+        self._recent_sends.append(now)
+        while self._recent_sends and now - self._recent_sends[0] > 1.0:
+            self._recent_sends.popleft()
+        self.stats.max_frames_in_window = max(
+            self.stats.max_frames_in_window, len(self._recent_sends)
+        )
         if self.stats.first_sent_at is None:
             self.stats.first_sent_at = now
         self.stats.last_sent_at = now

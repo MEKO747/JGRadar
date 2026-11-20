@@ -281,3 +281,24 @@ def test_stats_snapshot_is_json_friendly():
     assert snapshot["rate_hz"] == 4.8
     assert snapshot["stale_policy"] == "drop"
     assert isinstance(snapshot["dropped"], dict)
+
+
+def test_default_rate_leaves_headroom_below_the_protocol_cap():
+    """默认频率必须低于上限：贴线打的话某些 1 秒窗口正好 5 帧，零余量。"""
+    sender, _sent, _now = collect_sender()
+    assert sender.rate_hz == DEFAULT_RATE_HZ
+    assert DEFAULT_RATE_HZ < MAX_RATE_HZ
+
+
+def test_window_peak_is_reported_for_field_checks():
+    """统计里要有「任意 1 秒窗口最多发了几帧」，现场一眼看出有没有贴线。"""
+    sender, _sent, now = collect_sender(rate_hz=4.7)
+    rig = Rig()
+    for step in range(int(10.0 / 0.05)):
+        now["t"] = step * 0.05
+        sender.update(rig.frame(now["t"]))
+        sender.tick()
+    peak = sender.stats.max_frames_in_window
+    assert 4 <= peak <= 5, f"1 秒窗口峰值 {peak} 帧，按 4.7Hz 应该在 4~5"
+    assert peak <= MAX_RATE_HZ, "任何 1 秒窗口都不能超过 5 帧"
+    assert sender.snapshot()["max_frames_1s"] == peak

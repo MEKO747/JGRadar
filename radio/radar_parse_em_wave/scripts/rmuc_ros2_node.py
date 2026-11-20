@@ -12,6 +12,7 @@ from rclpy.clock import Clock, ClockType
 from rclpy.executors import ExternalShutdownException
 from rclpy.signals import SignalHandlerOptions
 
+from rmuc.referee_worker import RefereeWorker, open_serial_reader
 from rmuc.ros2_bridge import RadarParseEmWaveRos2Bridge
 from rmuc.rx import RxWorker
 from rmuc.sdr_control import SdrParameterController
@@ -24,6 +25,11 @@ def main() -> None:
     parser.add_argument("--flowgraph-python", default="/usr/bin/python3", help="GNU Radio 的 Python")
     parser.add_argument("--protocol", choices=("auto", "2026", "2027"), default="auto",
                         help="业务包协议版本，默认按载荷长度自动识别")
+    parser.add_argument("--referee-serial", default="",
+                        help="裁判系统串口（服务器→雷达的 0x020C/0x020E），例如 /dev/ttyUSB0")
+    parser.add_argument("--referee-baud", type=int, default=115200)
+    parser.add_argument("--referee-level", action="store_true",
+                        help="用 0x020E 的加密等级驱动解调等级，不再吃 /rmuc/demod_config 的等级")
     args, ros_args = parser.parse_known_args()
 
     share = Path(get_package_share_directory("radar_parse_em_wave"))
@@ -44,6 +50,21 @@ def main() -> None:
     receiver = RxWorker(
         controller.active_config, node.publish_decoded_packet, protocol=args.protocol
     )
+    referee = None
+    if args.referee_serial:
+        read, close = open_serial_reader(args.referee_serial, args.referee_baud)
+        own_team = lambda: node.demod_config.team.value[:1]  # noqa: E731
+        referee = RefereeWorker(
+            read=read,
+            get_own_team=own_team,
+            on_marking=lambda marking: node.publish_marking(marking, own_team=own_team()),
+            on_radar_info=lambda info: (
+                node.publish_radar_info(info),
+                args.referee_level and node.set_interference_level(info.encryption_level),
+            ),
+            warn=lambda message: logger.warning(message, throttle_duration_sec=5),
+            close=close,
+        )
     process = None
     stop_requested = False
 
@@ -67,6 +88,9 @@ def main() -> None:
         start_flowgraph()
         controller.start()
         receiver.start()
+        if referee is not None:
+            referee.start()
+            logger.info(f"裁判系统串口已连接：{args.referee_serial}")
         node.create_timer(2.0, start_flowgraph, clock=Clock(clock_type=ClockType.STEADY_TIME))
         logger.info("无线电接收节点已启动，等待 SDR 和有效业务帧")
         try:
@@ -75,6 +99,8 @@ def main() -> None:
         except (KeyboardInterrupt, ExternalShutdownException):
             pass
         finally:
+            if referee is not None:
+                referee.stop()
             receiver.stop()
             controller.stop()
     finally:

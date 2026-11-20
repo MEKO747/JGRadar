@@ -17,6 +17,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RadarParseEmWave0A04FieldStatus.msg"
   "msg/RadarParseEmWave0A05RobotBuff.msg"
   "msg/RadarParseEmWave0A06InterferenceKey.msg"
+  "msg/RadarParseEmWave020CMarking.msg"
+  "msg/RadarParseEmWave020ERadarInfo.msg"
   DEPENDENCIES std_msgs
 )
 
