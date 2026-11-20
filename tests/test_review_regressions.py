@@ -291,7 +291,12 @@ def test_ega_configs_declare_color_and_digit_semantics():
         assert cfg.detect.armor_classes == {0: "dead", 1: "red", 2: "blue"}
         assert cfg.detect.digit_classes[4] == "7"
         assert cfg.detect.digit_classes[5] == "Q"
-        assert cfg.detect.digit_backend == "mobilenet"
+        # 数字级有两条运行时：mobilenet（torch）与 onnx（ONNX Runtime）。
+        # vision_check 已迁到 onnx（运行时不需要 torch），ega_replay 仍是 mobilenet，
+        # 所以这里统一成"必须是已支持的一种"，并要求后缀与后端匹配。
+        assert cfg.detect.digit_backend in ("mobilenet", "onnx")
+        if cfg.detect.digit_backend == "onnx":
+            assert str(cfg.detect.digit_model).endswith(".onnx")
         assert cfg.detect.digit_img_size == 64
 
 

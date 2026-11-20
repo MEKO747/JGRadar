@@ -143,11 +143,12 @@ def bench_e2e(cfg_paths, *, video: str, resize: str, rois: int, iters: int) -> d
 
     session = getattr(getattr(cascade.car, "backend", None), "_session", None)
     providers = session.get_providers() if session is not None else []
-    digit = {"ready": bool(getattr(cascade.digit, "is_ready", False)), "ms": None}
-    if digit["ready"] and armors:
-        digit["ms"], _ = _timeit(
-            lambda: cascade.digit.classify(frame, [hit.bbox for hit in armors]), iters
-        )
+    # 数字级也要算进整帧：没有真检测时用同一批人工 ROI，否则会报成"0ms"。
+    digit_boxes = [hit.bbox for hit in armors] or list(boxes)
+    digit = {"ready": bool(getattr(cascade.digit, "is_ready", False)), "ms": None,
+             "rois": len(digit_boxes) if cascade.digit.is_ready else 0}
+    if digit["ready"] and digit_boxes:
+        digit["ms"], _ = _timeit(lambda: cascade.digit.classify(frame, digit_boxes), iters)
     return {
         "mode": "e2e",
         "frame": [width, height],

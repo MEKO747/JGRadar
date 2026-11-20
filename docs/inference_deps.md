@@ -66,25 +66,35 @@
 所以"每帧最多 6~10 个 ROI"这条经验上限**偏保守**——实测到 32 个 ROI 仍不到 110 ms。
 真机上 ROI 数由车框决定，不会长成 32；保留上限是为了给数字级和预处理留余量。
 
-## 5. 数字分类（待办）：`.pth` → ONNX 被一个小依赖挡住
+## 5. 数字分类：已切成 ONNX 运行时（不再依赖 torch）
 
-`tools/export_digit_onnx.py` 已写好（含"权重键名带 `backbone.` 前缀需要剥一层"的处理，
-这份 MobileNetV2.2.pth 就是带前缀的）。torch 在用户 site 可见（去掉 `PYTHONNOUSERSITE`
-即可），但导出还缺序列化图用的包：
-
-- `onnx` **8.5 MB**（TorchScript 导出器），或
-- `onnxscript` **0.7 MB**（dynamo 导出器）
-
-**没有安装**，等拍板。装完一条命令：
+`.pth` 已导出成 ONNX，运行时走 `OnnxDigitBackend`（onnxruntime），**不需要 torch**：
 
 ```zsh
+# 导出（一次性，需要 torch+torchvision+onnx；torch 在用户 site，所以这次要去掉 PYTHONNOUSERSITE）
 PYTHONNOUSERSITE= .venv/bin/python tools/export_digit_onnx.py \
     --weights /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/MobileNetv2.2.pth \
-    --out models/digit_mobilenetv2.onnx
+    --out   /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/digit/digit_mobilenetv2.onnx
 ```
 
-导出后运行时就只依赖 onnxruntime；不需要为了让 torch 可见而关掉 `PYTHONNOUSERSITE`
-（那会把用户 site 的 numpy 2.5.5 带进来，GNU Radio/OpenCV 会崩）。
+- 产物 8.49 MB，`torch 2.10.0+cu128`，MobileNetV2 / 64px / 6 类
+- 这份 `.pth` 的键名带 `backbone.` 前缀，导出脚本里会剥一层（不剥就是一大串 missing key）
+- `torch.onnx.export` 默认走 dynamo 导出器（要 onnxscript），脚本显式 `dynamo=False` 用 TorchScript 导出器，只依赖 `onnx`
+- `config/vision_check.yaml` 已改成 `digit_backend: onnx` + `digit_model: .../digit.onnx`；
+  `ega_replay.yaml` 仍是 `mobilenet`，两条路都保留
+
+### 安装踩的坑（值得记下来）
+
+`pip install onnx` 默认拉 **onnx 1.23.2**，它会连带把 venv 里的 **numpy 升到 2.5.5**，
+于是 scipy 1.11.4（要 numpy<1.28）和 cv2 的 ABI 全被打坏。处理：
+
+```zsh
+pip install "onnx==1.18.0" "numpy==1.26.4"   # 1.18 只要求 numpy>=1.22，与 1.26 兼容
+```
+
+现在的组合：`numpy 1.26.4 / onnx 1.18.0 / cv2 4.6.0 / scipy 1.11.4`，
+`import numpy, onnx, cv2, scipy` 全部正常，全量 pytest `806 passed, 1 skipped`。
+**以后往这个 venv 装包，装完必须验 numpy 版本没被顶上去。**
 
 ## 6. 复现命令
 

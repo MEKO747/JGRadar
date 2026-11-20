@@ -152,11 +152,7 @@ def build_cascade(cfg: DetectConfig) -> Cascade:
         num_classes=len(armor_classes), conf_thresh=cfg.armor_conf,
         iou_thresh=cfg.iou, max_dets=cfg.max_det,
     )
-    digit_backend = build_backend(
-        cfg.digit_backend or cfg.backend, model_path=cfg.digit_model, input_size=cfg.digit_img_size,
-        num_classes=len(digit_classes), conf_thresh=cfg.digit_conf,
-        iou_thresh=cfg.iou, max_dets=cfg.max_det,
-    )
+    digit_backend = _build_digit_backend(cfg, num_classes=len(digit_classes))
 
     car = CarDetector(
         car_backend,
@@ -182,6 +178,26 @@ def build_cascade(cfg: DetectConfig) -> Cascade:
         batcher=RoiBatcher(tile_size=cfg.digit_img_size, grid=_grid_for(cfg.roi_batch)),
     )
     return Cascade(car, armor, digit)
+
+
+def _build_digit_backend(cfg, *, num_classes: int):
+    """数字级单独装配：它是分类任务，不能复用检测式的 ``build_backend``。
+
+    ``digit_backend: onnx`` 走 ONNX 分类运行时（运行时不需要 torch）；
+    ``mobilenet`` 是原来的 torch 路径；留空则跟随 ``detect.backend``。
+    """
+    key = (cfg.digit_backend or cfg.backend or "").strip().lower()
+    if key in ("onnx", "onnx-digit", "onnx_digit"):
+        from jg_radar.detect.backends.onnx_digit_backend import OnnxDigitBackend
+
+        return OnnxDigitBackend(
+            cfg.digit_model, input_size=cfg.digit_img_size, num_classes=num_classes,
+        )
+    return build_backend(
+        key, model_path=cfg.digit_model, input_size=cfg.digit_img_size,
+        num_classes=num_classes, conf_thresh=cfg.digit_conf,
+        iou_thresh=cfg.iou, max_dets=cfg.max_det,
+    )
 
 
 def _grid_for(capacity: int) -> int:

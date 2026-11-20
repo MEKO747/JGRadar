@@ -72,6 +72,9 @@ def main(argv=None) -> int:
             model, dummy, str(out),
             input_names=["images"], output_names=["logits"],
             opset_version=17, do_constant_folding=True,
+            # torch 2.10 默认走 dynamo 导出器，需要 onnxscript；这里用 TorchScript
+            # 导出器，只依赖 onnx 包（本机已装 1.18，与 numpy 1.26 兼容）。
+            dynamo=False,
         )
     except ImportError as exc:
         print(json.dumps({

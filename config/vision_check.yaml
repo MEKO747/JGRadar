@@ -6,7 +6,9 @@ detect:
   backend: onnx
   car_model: /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/car/best.onnx
   armor_model: /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/armor/armor_best.onnx
-  digit_model: /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/MobileNetv2.2.pth
+  # 数字级走 ONNX（tools/export_digit_onnx.py 导出），运行时不需要 torch。
+  # 原始 .pth 仍可用于导出：MobileNetv2.2.pth
+  digit_model: /home/meko/radar/EGA_Radar_Algorithm-main/Main_ws/weights/digit/digit_mobilenetv2.onnx
   car_img_size: 1280
   armor_img_size: 192
   car_conf: 0.3
@@ -19,7 +21,7 @@ detect:
     0: dead
     1: red
     2: blue
-  digit_backend: mobilenet
+  digit_backend: onnx
   digit_img_size: 64
   digit_classes:
     0: '1'
