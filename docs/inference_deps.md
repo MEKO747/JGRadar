@@ -118,8 +118,9 @@ pip install "onnx==1.18.0" "numpy==1.26.4"   # 1.18 只要求 numpy>=1.22，与 
 
 ## 5.2 装甲模型那 201 个 CPU 节点：根因是 **batch 动态**，不是 H/W
 
-`provider_nodes` 报出装甲模型 520 个节点在 GPU、201 个在 CPU，全部落在
-`/model.6/.../attn/` 的 `Gather/Unsqueeze/Slice/Concat` 形状算子里。做了三组对照
+`provider_nodes` 报出装甲模型 520 个节点在 GPU、201 个在 CPU。按 ORT profile 逐节点复核，
+CPU 节点**大部分**落在 `/model.6/.../attn/`（164/201），其余为 `model.21` 32 个、`dfl` 5 个，
+都是 `Gather/Unsqueeze/Slice/Concat` 一类形状算子。做了三组对照
 （同一份 bench、同一条级联、同样的 6 / 10 个 ROI）：
 
 | 模型变体 | 输入 | armor 节点 | 6 ROI | 10 ROI |
