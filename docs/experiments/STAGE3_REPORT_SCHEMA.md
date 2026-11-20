@@ -62,14 +62,14 @@
 
 | 模板节 | 报告字段 | 必填 | 说明 |
 |---|---|---|---|
-| §1 基本信息 | `generated_at`、`reproduce.commands`、`verdict`、`caveats` | ✅ | 操作者写在 `operator`；目标一句话写在 `goal` |
+| §1 基本信息 | `generated_at`、`operator`、`reproduce.commands`、`verdict`、`caveats` | ✅ | **`operator` 必须非空**（谁跑的就是谁，不许留空）；目标一句话写在 `goal` |
 | §2 设备与序列号 | `devices[]` | ✅ | 每台：`kind/model/serial/transport/present`；`present=false` 必须让相关项 `blocked` |
-| §3 软件与配置指纹 | `commit`、`dirty_files`、`config_sha256`、`calibration{...}` | ✅ | 标定四项进 `calibration` 子对象，缺一项 ⇒ `vision_calibration` 为 `blocked` |
+| §3 软件与配置指纹 | `commit`、`dirty_files`、`config_sha256`、标定四项 | ✅ | 标定四项可放顶层 `calibration` 或 `checks[vision_calibration].value`，但**四项必须齐全**；缺一项 ⇒ `blocked`，实测值超限 ⇒ `fail` |
 | §4 原始数据落盘 | `artifacts[]` | ✅ | 每项 `kind/path/sha256/duration_s`；`pass` 必需的 artifact 缺 sha256 ⇒ 该项 `fail` |
 | §5 执行步骤与结果 | `checks[]` | ✅ | 每项一条；`steps[]` 可另存命令输出，但**判定只认 `checks`** |
 | §6 阶段 3 验收映射 | `checks[].id` 四项 + `verdict` | ✅ | 顺序固定：radio_accuracy → radio_uplink → vision_calibration → fusion_switch |
 | §7 反例与风险 | `caveats[]` | ✅ | **非空**；至少写「本次不能证明什么」与「已知混杂因素」 |
-| §8 复现包 | `reproduce.commands` + `artifacts` | ✅ | 别人拿到 commit + 配置哈希 + 标定 + 数据 + 命令能重跑 |
+| §8 复现包 | `reproduce.commands` + `artifacts` | ✅ | 命令必须**能原样复制运行**：只写实际给过的参数，不许留 `--radio-log  --truth` 这类空 flag |
 
 ## 4. 我会逐条核的检查表
 
@@ -81,6 +81,15 @@
 - [ ] `caveats` 是否非空
 - [ ] `commit` / `config_sha256` 是否与 `git rev-parse HEAD`、`sha256sum config/*.yaml` 对得上
 - [ ] 报告能否直接填满模板八节（不许留「见聊天记录」这种指代）
+
+## 4.1 首次核对发现的两处缺口（2026-11-21，`d06776c`）
+
+1. `operator` 是空字符串——模板 §1 要求写操作者，工具没填。
+2. `reproduce.commands` 里是 `--radio-log  --truth  --fusion-log  --switch-event `（空 flag），
+   照抄执行会立刻报错，不符合「能原样复制运行」。
+
+其余六项通过。另有一处语义偏差已由本文件放开：标定四项实际放在
+`checks[vision_calibration].value` 里，语义完整，不再要求搬去顶层。
 
 ## 5. 现在就该能跑出来的东西（无设备基线）
 
