@@ -11,8 +11,12 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+RADIO_PACKAGE = ROOT / "radio" / "radar_parse_em_wave"
+# 接收包（``rmuc``）在 radio/ 下，没有 pip install 进环境；直接加进 sys.path，
+# 免得测试能不能导入取决于"先 import 了哪个 tools 模块"这种副作用。
+for _path in (ROOT, RADIO_PACKAGE):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CONFIG_DIR = ROOT / "config"

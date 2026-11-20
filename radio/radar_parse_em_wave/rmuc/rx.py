@@ -5,7 +5,7 @@ import threading
 
 import zmq
 
-from .coder import AirFrameDecoder, BusinessDecoder, SerialFrameDecoder
+from .coder import PROTOCOL_AUTO, AirFrameDecoder, BusinessDecoder, SerialFrameDecoder
 from .constants import LOCAL_HOST, RX_INFO_DEFAULT_PORT, RX_INTERFERE_DEFAULT_PORT, WaveType
 from .state import DemodConfig
 
@@ -15,9 +15,13 @@ class RxWorker:
         self,
         get_config: Callable[[], DemodConfig],
         publish: Callable[[dict], None],
+        *,
+        protocol: str = PROTOCOL_AUTO,
     ):
         self._get_config = get_config
         self._publish = publish
+        #: 业务包按哪个赛季的协议解释；``auto`` 按载荷长度自动识别。
+        self._protocol = protocol
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="rmuc-rx", daemon=True)
 
@@ -65,6 +69,6 @@ class RxWorker:
 
                     for payload in air[wave].feed_unpacked_bytes(bits):
                         for frame in serial[wave].feed(payload):
-                            decoded = BusinessDecoder.decode(frame)
+                            decoded = BusinessDecoder.decode(frame, protocol=self._protocol)
                             if decoded is not None and config == self._get_config():
                                 self._publish(decoded)

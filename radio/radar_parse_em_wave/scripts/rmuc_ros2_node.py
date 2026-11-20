@@ -22,6 +22,8 @@ def main() -> None:
     parser.add_argument("--mode", choices=("rx",), default="rx", help="赛场接收模式")
     parser.add_argument("--sdr-uri", help="接收板 IIO URI，默认 ip:192.168.2.1")
     parser.add_argument("--flowgraph-python", default="/usr/bin/python3", help="GNU Radio 的 Python")
+    parser.add_argument("--protocol", choices=("auto", "2026", "2027"), default="auto",
+                        help="业务包协议版本，默认按载荷长度自动识别")
     args, ros_args = parser.parse_known_args()
 
     share = Path(get_package_share_directory("radar_parse_em_wave"))
@@ -39,7 +41,9 @@ def main() -> None:
         lambda: node.demod_config,
         lambda message: logger.warning(message, throttle_duration_sec=5),
     )
-    receiver = RxWorker(controller.active_config, node.publish_decoded_packet)
+    receiver = RxWorker(
+        controller.active_config, node.publish_decoded_packet, protocol=args.protocol
+    )
     process = None
     stop_requested = False
 

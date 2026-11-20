@@ -36,7 +36,12 @@ RADIO_PACKAGE = ROOT / "radio" / "radar_parse_em_wave"
 if str(RADIO_PACKAGE) not in sys.path:
     sys.path.insert(0, str(RADIO_PACKAGE))
 
-from rmuc.coder import AirFrameDecoder, BusinessDecoder, SerialFrameDecoder  # noqa: E402
+from rmuc.coder import (  # noqa: E402
+    PROTOCOL_AUTO,
+    AirFrameDecoder,
+    BusinessDecoder,
+    SerialFrameDecoder,
+)
 from rmuc.constants import (  # noqa: E402
     RX_INTERFERE_DEFAULT_PORT,
     RX_INFO_DEFAULT_PORT,
@@ -58,6 +63,10 @@ class ChannelStats:
     sync: int = 0
     frames: int = 0
     decoded: int = 0
+    #: 业务包按哪个赛季协议解释；``auto`` 按载荷长度自动识别。
+    protocol: str = PROTOCOL_AUTO
+    #: 解出的业务包分别属于哪个赛季，用来发现"两代混着来"的情况。
+    protocols: dict[str, int] = field(default_factory=dict)
     air: AirFrameDecoder = field(init=False)
     serial: SerialFrameDecoder = field(init=False)
 
@@ -72,8 +81,11 @@ class ChannelStats:
             self.sync += 1
             for frame in self.serial.feed(payload):
                 self.frames += 1
-                if BusinessDecoder.decode(frame) is not None:
+                decoded = BusinessDecoder.decode(frame, protocol=self.protocol)
+                if decoded is not None:
                     self.decoded += 1
+                    version = decoded.get("protocol", "?")
+                    self.protocols[version] = self.protocols.get(version, 0) + 1
 
 
 def classify(stats: ChannelStats, seconds: float) -> str:
@@ -101,11 +113,16 @@ def classify(stats: ChannelStats, seconds: float) -> str:
 
 def _describe(stats: ChannelStats, seconds: float) -> str:
     span = max(seconds, 1e-9)
-    return (
+    line = (
         f"{WAVE_NAMES[stats.wave]:4s} "
         f"比特 {stats.bits / span:7.0f} B/s | "
         f"帧同步 {stats.sync:5d} | 序列帧 {stats.frames:5d} | 业务解码 {stats.decoded:5d}"
     )
+    if stats.protocols:
+        line += " | 协议 " + "/".join(
+            f"{version}×{count}" for version, count in sorted(stats.protocols.items())
+        )
+    return line
 
 
 def run_bits(args: argparse.Namespace) -> int:
@@ -114,7 +131,7 @@ def run_bits(args: argparse.Namespace) -> int:
 
     ports = {WaveType.INFO: args.info_port, WaveType.INTERFERE: args.interfere_port}
     context = zmq.Context()
-    stats = {wave: ChannelStats(wave) for wave in WAVE_NAMES}
+    stats = {wave: ChannelStats(wave, protocol=args.protocol) for wave in WAVE_NAMES}
     poller = zmq.Poller()
     sockets = {}
     for wave, port in ports.items():
@@ -270,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
                         help=f"信息波比特流端口，默认 {RX_INFO_DEFAULT_PORT}")
     parser.add_argument("--interfere-port", type=int, default=RX_INTERFERE_DEFAULT_PORT,
                         help=f"干扰波比特流端口，默认 {RX_INTERFERE_DEFAULT_PORT}")
+    parser.add_argument("--protocol", choices=("auto", "2026", "2027"), default="auto",
+                        help="业务包协议版本，默认按载荷长度自动识别")
     args = parser.parse_args(argv)
     return run_watch(args) if args.mode == "watch" else run_bits(args)
 

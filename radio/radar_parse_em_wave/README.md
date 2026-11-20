@@ -1,6 +1,10 @@
 # radar_parse_em_wave
 
-JGRadar 的 ROS 2 无线电接收包。SDR 采样经 GNU Radio 解调，本包校验帧头、CRC 和业务长度，再发布 RoboMaster 业务消息。当前实现基于 **RMUC 2026 超级对抗赛规则 V2.0.1 与通信协议 V2.0.0**。接入其他赛季时，需按当季协议核对射频参数、机器人槽位和消息字段。
+JGRadar 的 ROS 2 无线电接收包。SDR 采样经 GNU Radio 解调，本包校验帧头、CRC 和业务长度，再发布 RoboMaster 业务消息。业务包同时支持 **2026**（超级对抗赛通信协议 V2.0.0）和 **2027**（高校系列赛通信协议 V1.0.0）两套布局，默认按载荷长度自动识别；接入其他赛季时，需按当季协议核对射频参数、机器人槽位和消息字段。
+
+两代的差别集中在长度上：`0x0A04` 从 8 字节变 12 字节（末尾多一个地形跨越状态 `uint32`），`0x0A05` 从 36/41 字节变 47 字节（工程机器人变保留位、末尾多自定义装甲模块加固区域的圆心与半径，单位 mm）。`0x0A01`/`0x0A02`/`0x0A03` 长度不变，但 2027 里工程和空中变成保留位，不再下发。
+
+接收节点用 `--protocol auto|2026|2027` 控制解释口径（默认 `auto`）。长度相同的命令在 `auto` 下按 2027 解释；回放 2026 季的录制时请显式指定 `--protocol 2026`，否则工程和空中两个槽位会被当成保留位丢掉。`tools/radio_probe.py` 有同名参数，并在结论里列出每个业务包属于哪个赛季。
 
 - **无线电原始坐标**订阅 `/rmuc/rx/packet_0x0a01`，类型为 `radar_parse_em_wave/msg/RadarParseEmWave0A01RobotPosition`，单位为厘米。
 - **JGRadar 融合坐标**订阅 `/jg_radar/fused`，类型为 `std_msgs/msg/String`。JSON 中的坐标在 `robots.<机器人ID>.position_cm`，`source` 表示该帧采用的来源。

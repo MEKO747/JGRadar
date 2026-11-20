@@ -98,98 +98,231 @@ class SerialFrameDecoder:
         return frames
 
 
+# ==================== 协议版本 ====================
+
+PROTOCOL_2026 = "2026"
+PROTOCOL_2027 = "2027"
+PROTOCOL_AUTO = "auto"
+
+SUPPORTED_PROTOCOLS = (PROTOCOL_2026, PROTOCOL_2027)
+
+#: 自动识别时，同一长度在两代都合法就按这个赛季解释。
+#: 2027 是目标赛季（规则与通信协议都以 2027 为准），2026 只用于回放旧录制。
+DEFAULT_PROTOCOL = PROTOCOL_2027
+
+#: 各赛季每个业务命令的合法载荷长度。
+#:
+#: 长度是唯一可靠的版本仲裁依据：0x0A04 在 2026 是 8 字节、2027 是 12 字节，
+#: 0x0A05 在 2026 是 36/41 字节、2027 是 47 字节，两代不重叠。0x0A01/0x0A02/
+#: 0x0A03 长度相同，只能按 ``DEFAULT_PROTOCOL`` 解释——它们两代的字节布局
+#: 一样，差别只在哪些槽位是保留位。
+PAYLOAD_LENGTHS: dict[str, dict[int, tuple[int, ...]]] = {
+    PROTOCOL_2026: {
+        CMD_ROBOT_POSITION: (24,),
+        CMD_ROBOT_HP: (12,),
+        CMD_ROBOT_AMMO: (10,),
+        CMD_FIELD_STATUS: (8,),
+        CMD_ROBOT_BUFF: (36, 41),
+        CMD_INTERFERENCE_KEY: (6,),
+    },
+    PROTOCOL_2027: {
+        CMD_ROBOT_POSITION: (24,),
+        CMD_ROBOT_HP: (12,),
+        CMD_ROBOT_AMMO: (10,),
+        CMD_FIELD_STATUS: (12,),
+        CMD_ROBOT_BUFF: (47,),
+        CMD_INTERFERENCE_KEY: (6,),
+    },
+}
+
+#: 位置包 12 个 int16 的槽位顺序（每槽 x、y 两个）。``None`` = 保留位。
+#: 2027 只下发重装、3 号步兵、4 号步兵、哨兵，工程和空中是保留位。
+POSITION_SLOTS: dict[str, tuple[str | None, ...]] = {
+    PROTOCOL_2026: ("hero", "eng", "inf3", "inf4", "aerial", "sentry"),
+    PROTOCOL_2027: ("hero", None, "inf3", "inf4", None, "sentry"),
+}
+
+#: 血量包 6 个 uint16 的槽位顺序。2026 的 2 号槽是工程、4 号槽未命名。
+HP_SLOTS: dict[str, tuple[str | None, ...]] = {
+    PROTOCOL_2026: ("hero", "eng", "inf3", "inf4", None, "sentry"),
+    PROTOCOL_2027: ("hero", None, "inf3", "inf4", None, "sentry"),
+}
+
+#: 弹量包 5 个 uint16 的槽位顺序。
+AMMO_SLOTS: dict[str, tuple[str | None, ...]] = {
+    PROTOCOL_2026: ("hero", "inf3", "inf4", "aerial", "sentry"),
+    PROTOCOL_2027: ("hero", "inf3", "inf4", None, "sentry"),
+}
+
+#: 0x0A05 每个机器人增益块的起始偏移，块结构固定为 ``<BHBBH``：
+#: 回血(1B) 冷却(2B) 防御(1B) 负防御(1B) 攻击(2B)，共 7 字节。
+#: 2027 在 7~13 留了保留位，所以重装之后直接跳到 3 号步兵。
+BUFF_OFFSETS: dict[str, tuple[tuple[str, int], ...]] = {
+    PROTOCOL_2026: (("hero", 0), ("eng", 7), ("inf3", 14), ("inf4", 21), ("sentry", 28)),
+    PROTOCOL_2027: (("hero", 0), ("inf3", 14), ("inf4", 21), ("sentry", 28)),
+}
+
+#: 0x0A05 主要状态字节的偏移。2027 的 37 号字节是保留位。
+STATUS_OFFSETS: dict[str, tuple[tuple[str, int], ...]] = {
+    PROTOCOL_2026: (("hero", 36), ("eng", 37), ("inf3", 38), ("inf4", 39), ("sentry", 40)),
+    PROTOCOL_2027: (("hero", 36), ("inf3", 38), ("inf4", 39), ("sentry", 40)),
+}
+
+#: 2027 新增：自定义装甲模块加固区域圆心 x、y 和半径，单位 mm（0 = 暂无情报）。
+ARMOR_OFFSET = (41, 43, 45)
+
+#: 0x0A05 里哨兵姿态的字节偏移，两代相同。
+POSTURE_OFFSET = 35
+
+#: 2026 的 36 字节版本没有主要状态字节。
+_MIN_STATUS_LENGTH = 41
+
+
+def resolve_protocol(
+    cmd_id: int, payload_len: int, requested: str = PROTOCOL_AUTO
+) -> str | None:
+    """判断这份载荷属于哪个赛季；长度不认识就返回 ``None``。
+
+    ``requested`` 指定了赛季时长度必须与它相符——把 2026 的 8 字节 0x0A04
+    当 2027 读会读到别的字段，宁可判不合法也不要猜。
+    """
+    if requested != PROTOCOL_AUTO:
+        if requested not in PAYLOAD_LENGTHS:
+            raise ValueError(
+                f"未知协议版本 {requested!r}；可用 = {list(SUPPORTED_PROTOCOLS)} 或 {PROTOCOL_AUTO!r}"
+            )
+        return requested if payload_len in PAYLOAD_LENGTHS[requested].get(cmd_id, ()) else None
+
+    matches = [
+        version
+        for version, table in PAYLOAD_LENGTHS.items()
+        if payload_len in table.get(cmd_id, ())
+    ]
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    return DEFAULT_PROTOCOL
+
+
 # ==================== 业务层解析 ====================
 
+
+def _decode_position(payload: bytes, version: str) -> dict:
+    values = struct.unpack("<12h", payload)
+    positions = {
+        name: {"x": values[index * 2], "y": values[index * 2 + 1]}
+        for index, name in enumerate(POSITION_SLOTS[version])
+        if name
+    }
+    return {"cmd": "0x0A01", "protocol": version, "positions": positions}
+
+
+def _decode_hp(payload: bytes, version: str) -> dict:
+    values = struct.unpack("<6H", payload)
+    hp = {
+        name: values[index]
+        for index, name in enumerate(HP_SLOTS[version])
+        if name
+    }
+    return {"cmd": "0x0A02", "protocol": version, "hp": hp}
+
+
+def _decode_ammo(payload: bytes, version: str) -> dict:
+    values = struct.unpack("<5H", payload)
+    ammo = {
+        name: values[index]
+        for index, name in enumerate(AMMO_SLOTS[version])
+        if name
+    }
+    return {"cmd": "0x0A03", "protocol": version, "ammo": ammo}
+
+
+def _decode_field(payload: bytes, version: str) -> dict:
+    if version == PROTOCOL_2027:
+        remain, total, status, terrain = struct.unpack("<HHII", payload)
+        field = {
+            "remain_coins": remain,
+            "total_coins": total,
+            "status_flags": status,
+            "terrain_flags": terrain,
+        }
+    else:
+        remain, total, status = struct.unpack("<HHI", payload)
+        field = {"remain_coins": remain, "total_coins": total, "status_flags": status}
+    return {"cmd": "0x0A04", "protocol": version, "field": field}
+
+
+def _decode_buff(payload: bytes, version: str) -> dict:
+    buffs = {}
+    for name, offset in BUFF_OFFSETS[version]:
+        heal, cool, defense, vuln, attack = struct.unpack_from("<BHBBH", payload, offset)
+        buffs[name] = {
+            "heal": heal,
+            "cool": cool,
+            "def": defense,
+            "vuln": vuln,
+            "atk": attack,
+        }
+
+    if len(payload) >= _MIN_STATUS_LENGTH:
+        statuses = {name: payload[offset] for name, offset in STATUS_OFFSETS[version]}
+    else:
+        # 2026 的 36 字节旧版没有状态字节，补零保持下游形状一致。
+        statuses = {"hero": 0, "eng": 0, "inf3": 0, "inf4": 0, "sentry": 0}
+
+    decoded = {
+        "cmd": "0x0A05",
+        "protocol": version,
+        "buffs": buffs,
+        "sentry_posture": payload[POSTURE_OFFSET],
+        "robot_statuses": statuses,
+    }
+    if version == PROTOCOL_2027:
+        x, y, radius = struct.unpack_from("<HHH", payload, ARMOR_OFFSET[0])
+        decoded["armor"] = {"x_mm": x, "y_mm": y, "radius_mm": radius}
+    return decoded
+
+
+_HANDLERS = {
+    CMD_ROBOT_POSITION: _decode_position,
+    CMD_ROBOT_HP: _decode_hp,
+    CMD_ROBOT_AMMO: _decode_ammo,
+    CMD_FIELD_STATUS: _decode_field,
+    CMD_ROBOT_BUFF: _decode_buff,
+}
+
+
 class BusinessDecoder:
-    """解析支持的 RMUC 2026 无线电业务包。"""
+    """解析 RMUC 业务包，支持 2026 / 2027 两套协议。
+
+    两代协议的字节布局并不完全一致：``0x0A04`` 从 8 字节变 12 字节（末尾多了
+    一个地形跨越状态 uint32），``0x0A05`` 从 41 字节变 47 字节（工程机器人变成
+    保留位、末尾多了自定义装甲模块加固区域的圆心与半径）。``0x0A01``/
+    ``0x0A02``/``0x0A03`` 长度没变，只是保留位换了语义。
+
+    版本用 ``protocol`` 参数控制：``"auto"`` 按载荷长度自动识别（两代长度
+    不重叠的命令可靠），长度相同的命令按 ``DEFAULT_PROTOCOL`` 解释；
+    ``"2026"`` / ``"2027"`` 则要求长度必须与该赛季相符，不符判不合法。
+    """
 
     @staticmethod
-    def decode(frame: SerialFrame) -> dict | None:
+    def decode(frame: SerialFrame, *, protocol: str = PROTOCOL_AUTO) -> dict | None:
         """按命令字和长度解析有效载荷。"""
-        payload = frame.payload
-        payload_len = len(payload)
+        version = resolve_protocol(frame.cmd_id, len(frame.payload), protocol)
+        if version is None:
+            return None
 
-        if frame.cmd_id == CMD_ROBOT_POSITION and payload_len == 24:
-            values = struct.unpack("<12h", payload)
-            names = ["hero", "eng", "inf3", "inf4", "aerial", "sentry"]
-            return {
-                "cmd": "0x0A01",
-                "positions": {
-                    name: {"x": values[index * 2], "y": values[index * 2 + 1]}
-                    for index, name in enumerate(names)
-                },
-            }
+        handler = _HANDLERS.get(frame.cmd_id)
+        if handler is not None:
+            return handler(frame.payload, version)
 
-        if frame.cmd_id == CMD_ROBOT_HP and payload_len == 12:
-            values = struct.unpack("<6H", payload)
-            return {
-                "cmd": "0x0A02",
-                "hp": {
-                    "hero": values[0],
-                    "eng": values[1],
-                    "inf3": values[2],
-                    "inf4": values[3],
-                    "sentry": values[5],
-                },
-            }
-
-        if frame.cmd_id == CMD_ROBOT_AMMO and payload_len == 10:
-            values = struct.unpack("<5H", payload)
-            return {
-                "cmd": "0x0A03",
-                "ammo": {
-                    "hero": values[0],
-                    "inf3": values[1],
-                    "inf4": values[2],
-                    "aerial": values[3],
-                    "sentry": values[4],
-                },
-            }
-
-        if frame.cmd_id == CMD_FIELD_STATUS and payload_len == 8:
-            remain_coins, total_coins, status_flags = struct.unpack("<HHI", payload)
-            return {
-                "cmd": "0x0A04",
-                "field": {
-                    "remain_coins": remain_coins,
-                    "total_coins": total_coins,
-                    "status_flags": status_flags,
-                },
-            }
-
-        if frame.cmd_id == CMD_ROBOT_BUFF and payload_len in (36, 41):
-            # 旧版 36 B 不含机器人主要状态；新版 41 B 在末尾追加 5 个状态字节。
-            if payload_len == 36:
-                values = struct.unpack("<" + ("BHBBH" * 4) + "BHBBHB", payload)
-                robot_statuses = [0] * 5
-            else:
-                values = struct.unpack("<" + ("BHBBH" * 5) + "B" + ("B" * 5), payload)
-                robot_statuses = values[26:31]
-
-            names = ["hero", "eng", "inf3", "inf4", "sentry"]
-            buffs = {}
-            for index, name in enumerate(names):
-                base = index * 5
-                buffs[name] = {
-                    "heal": values[base],
-                    "cool": values[base + 1],
-                    "def": values[base + 2],
-                    "vuln": values[base + 3],
-                    "atk": values[base + 4],
-                }
-            return {
-                "cmd": "0x0A05",
-                "buffs": buffs,
-                "sentry_posture": values[25],
-                "robot_statuses": dict(zip(names, robot_statuses)),
-            }
-
-        if frame.cmd_id == CMD_INTERFERENCE_KEY and payload_len == 6:
+        if frame.cmd_id == CMD_INTERFERENCE_KEY:
             return {
                 "cmd": "0x0A06",
-                "key": payload.decode("ascii", errors="replace"),
+                "protocol": version,
+                "key": frame.payload.decode("ascii", errors="replace"),
             }
-
         return None
 
 
