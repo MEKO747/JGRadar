@@ -96,6 +96,26 @@ pip install "onnx==1.18.0" "numpy==1.26.4"   # 1.18 只要求 numpy>=1.22，与 
 `import numpy, onnx, cv2, scipy` 全部正常，全量 pytest `806 passed, 1 skipped`。
 **以后往这个 venv 装包，装完必须验 numpy 版本没被顶上去。**
 
+## 5.1 证据自证：`providers` 列表 ≠ 真在 GPU 上算
+
+`session.get_providers()` 只说"执行器建起来了"。CUDA 执行器能建起来、却一个节点都
+没分到时，它**照样排在列表最前面**——所以 JSON 里写着 CUDA 不等于真在 GPU 上跑。
+
+`tools/bench_inference.py --e2e` 现在额外做一次 ORT profiling（一次性，不计入计时），
+统计**每个 provider 实际分到的节点数**，写进 JSON：
+
+```json
+"provider_nodes": {"car":   {"CUDAExecutionProvider": 398},
+                   "armor":  {"CUDAExecutionProvider": 520, "CPUExecutionProvider": 201},
+                   "digit":  {"CUDAExecutionProvider": 100}},
+"cuda_nodes": 1018, "cpu_nodes": 201, "fell_back_to_cpu": false
+```
+
+- **CUDA 节点数为 0 时 bench 返回退出码 1**：宁可跑失败，也不交一个看不出真假的数。
+- 顺手发现一个事实：**装甲模型有 201 个节点落在 CPU**（520 在 GPU）。整帧 10.6ms 里
+  包含这部分，属于当前真实状态，不是测量误差。
+- 单模型路径与 e2e 路径现在同口径都有 `fell_back_to_cpu`。
+
 ## 6. 复现命令
 
 ```zsh

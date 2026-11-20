@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "RoboMaster 雷达站视觉算法核心（不含相机驱动/串口/UI）"
 requires-python = ">=3.10"
 dependencies = [
-    "numpy>=1.26",
+    # 必须钉住 <2：numpy 2.x 与 scipy 1.11 / cv2 4.6 的 C-API 不兼容，
+    # 装依赖时被顶到 2.x 会表现成 import 阶段直接崩（不是运行期报错）。
+    "numpy>=1.26,<2",
     "PyYAML>=6.0",
     "opencv-python>=4.8",
     "scipy>=1.11",
@@ -17,6 +19,8 @@ dependencies = [
 [project.optional-dependencies]
 # 仅离线标定/网格处理使用；运行时零 3D 库依赖（走预计算查找表）
 offline = ["open3d>=0.18"]
+# 数字模型 .pth -> ONNX 的导出工具链（torch 侧一次性使用，运行时不需要）
+export = ["onnx>=1.18"]
 # 推理后端，按需装一个
 infer-trt = ["tensorrt", "torch", "ultralytics"]
 infer-onnx = ["onnxruntime"]

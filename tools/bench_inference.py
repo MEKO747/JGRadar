@@ -143,6 +143,30 @@ def bench_e2e(cfg_paths, *, video: str, resize: str, rois: int, iters: int) -> d
 
     session = getattr(getattr(cascade.car, "backend", None), "_session", None)
     providers = session.get_providers() if session is not None else []
+
+    # 自证：providers 列表只说"建起来了"，节点数才说"真在哪儿算"。
+    # 开一次 profiling（一次性，不计入上面的计时），统计每个 provider 分到的节点。
+    from jg_radar.integration.gpu_evidence import provider_node_counts
+
+    available = ort.get_available_providers()
+    wanted = [name for name in ("CUDAExecutionProvider", "CPUExecutionProvider") if name in available]
+    node_counts: dict[str, dict[str, int]] = {}
+    for label, model, size in (
+        ("car", getattr(cfg.detect, "car_model", ""), getattr(cfg.detect, "car_img_size", 0)),
+        ("armor", getattr(cfg.detect, "armor_model", ""), getattr(cfg.detect, "armor_img_size", 0)),
+        ("digit", getattr(cfg.detect, "digit_model", ""), getattr(cfg.detect, "digit_img_size", 0)),
+    ):
+        if model:
+            node_counts[label] = provider_node_counts(
+                model, input_shape=(1, 3, int(size), int(size)), providers=wanted, ort=ort,
+            )
+    totals: dict[str, int] = {}
+    for counts in node_counts.values():
+        for provider, number in counts.items():
+            totals[provider] = totals.get(provider, 0) + number
+    cuda_nodes = sum(number for provider, number in totals.items() if "CUDA" in provider or "TRT" in provider.upper())
+    cpu_nodes = sum(number for provider, number in totals.items() if provider == "CPUExecutionProvider")
+    fell_back = bool("CUDAExecutionProvider" in available) and cuda_nodes == 0
     # 数字级也要算进整帧：没有真检测时用同一批人工 ROI，否则会报成"0ms"。
     digit_boxes = [hit.bbox for hit in armors] or list(boxes)
     digit = {"ready": bool(getattr(cascade.digit, "is_ready", False)), "ms": None,
@@ -153,6 +177,10 @@ def bench_e2e(cfg_paths, *, video: str, resize: str, rois: int, iters: int) -> d
         "mode": "e2e",
         "frame": [width, height],
         "providers": providers,
+        "provider_nodes": node_counts,
+        "cuda_nodes": cuda_nodes,
+        "cpu_nodes": cpu_nodes,
+        "fell_back_to_cpu": fell_back,
         "car_ms": round(car_ms, 1),
         "cars": len(cars),
         "armor_ms": round(armor_ms, 1),
@@ -213,6 +241,11 @@ def main(argv=None) -> int:
         result["preload"] = preload
         print(json.dumps(result, ensure_ascii=False))
         _maybe_write(args.out, "e2e", result)
+        if result["fell_back_to_cpu"]:
+            # 宁可跑失败，也不许交一份看不出真假的数
+            print(json.dumps({"error": "CUDA 执行器建起来了，但一个节点都没分到——这批数不能当 GPU 证据"},
+                             ensure_ascii=False))
+            return 1
         return 0
 
     models = [Path(path) for path in args.model]
