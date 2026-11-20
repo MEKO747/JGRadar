@@ -802,6 +802,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.json:
         print(json.dumps({
+            "protocol": args.protocol,
             "seconds": round(result.seconds, 3),
             "exit_code": result.exit_code,
             "timed_out": result.timed_out,

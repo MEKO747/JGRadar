@@ -22,16 +22,18 @@ from tools.radio_replay import (
     SOURCE_BLOCK_NAME,
     TELEMETRY_SOURCE_PORT,
     ReplayError,
+    CaptureResult,
     compile_flowgraph,
     decode_bit_files,
     derive_record_flowgraph,
     derive_replay_flowgraph,
+    format_counts,
     load_flowgraph,
     run_replay_file,
     variable_values,
 )
 
-from rmuc.coder import SOF, crc8, crc16
+from rmuc.coder import SOF, crc8, crc16, PROTOCOL_2026, PROTOCOL_2027
 from rmuc.constants import ACCESS_CODES, AIR_HEADER, WaveType
 
 WAVES = (WaveType.INFO.value, WaveType.INTERFERE.value)
@@ -212,6 +214,15 @@ def test_replay_refuses_auto_protocol():
         decode_bit_files({WaveType.INFO.value: Path("unused.bin")}, protocol="auto")
     with pytest.raises(ReplayError, match="显式指定协议版本"):
         run_replay_file("unused.c64", protocol="auto")
+
+
+def test_summary_states_the_protocol_version():
+    """回放摘要必须写明口径：半年后翻日志要分得清是哪个赛季的录制。"""
+    result = CaptureResult(stats={}, seconds=1.0, exit_code=0, timed_out=False, stderr="")
+    assert format_counts(result, protocol=PROTOCOL_2026).startswith("协议版本 2026")
+    assert format_counts(result, protocol=PROTOCOL_2027).startswith("协议版本 2027")
+    # 不传时默认按 2027，和 coder 的默认口径一致
+    assert format_counts(result).startswith(f"协议版本 {PROTOCOL_2027}")
 
 
 def test_decode_bit_files_tolerates_missing_file(tmp_path):
