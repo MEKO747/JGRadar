@@ -86,6 +86,9 @@ def test_uplink_metrics_and_failures(tmp_path):
     assert result["status"] == PASS
     assert 4.65 < result["value"]["effective_rate_hz"] < 4.75
     assert result["value"]["max_frames_1s"] <= 5
+    # schema §2.1：通过时这三个字段必须自洽
+    assert result["value"]["frames_sent"] == result["value"]["frames_written"]
+    assert result["value"]["write_ok_ratio"] == 1.0
 
     # 1 秒断流 + 之后 2Hz → 频率与断流都超
     slow = write_radio(tmp_path / "slow.jsonl",
@@ -108,6 +111,9 @@ def test_calibration_requires_all_four_items(tmp_path):
     assert result["status"] == PASS
     assert len(result["value"]["sha256"]) == 64
     assert result["value"]["serial"] == "DA1234567"
+    # schema §2.1：验收读的就是运行时那一套，且必须记下「加载成功」
+    assert result["value"]["config_loads"] is True
+    assert result["value"]["config_load_error"] == ""
 
 
 def test_pass_without_artifacts_is_downgraded_to_fail(tmp_path, monkeypatch):
@@ -185,6 +191,8 @@ def test_calibration_rejects_a_yaml_the_runtime_would_refuse(tmp_path):
     assert result["status"] == FAIL
     assert "运行时加载不了" in result["reason"]
     assert "calibration" in result["reason"]
+    assert result["value"]["config_loads"] is False
+    assert result["value"]["config_load_error"]
 
 
 def test_calibration_pass_is_caveated_as_config_only(tmp_path):

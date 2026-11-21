@@ -219,14 +219,14 @@ def check_radio_accuracy(radio_log: Path | None, truth: list[dict] | None) -> di
         reason = (f"{len(uncovered)}/{len(truth)} 个真值段一个采样点都没有"
                   if uncovered else "真值时间段内没有任何有效上报")
         return {"status": BLOCKED, "reason": reason,
-                "value": {"samples": len(distances), "truth_segments": len(truth),
+                "value": {"samples": len(distances), "truthed_segments": len(truth),
                           "segments_covered": len(truth) - len(uncovered)},
                 "threshold": threshold, "artifacts": [], "grade": "B"}
     if len(distances) < ACCURACY_MIN_SAMPLES:
         return {"status": BLOCKED,
                 "reason": f"有效上报只有 {len(distances)} 个，少于 {ACCURACY_MIN_SAMPLES} 个："
                           "样本不足时百分比没有意义",
-                "value": {"samples": len(distances), "truth_segments": len(truth),
+                "value": {"samples": len(distances), "truthed_segments": len(truth),
                           "segments_covered": len(truth) - len(uncovered)},
                 "threshold": threshold, "artifacts": [], "grade": "B"}
 
@@ -236,7 +236,7 @@ def check_radio_accuracy(radio_log: Path | None, truth: list[dict] | None) -> di
     return {
         "status": status, "reason": "" if status == PASS else f"准确率 {ratio:.1%} 低于阈值",
         "value": {"samples": len(distances), "accurate_ratio": round(ratio, 4),
-                  "truth_segments": len(truth), "segments_covered": len(truth) - len(uncovered),
+                  "truthed_segments": len(truth), "segments_covered": len(truth) - len(uncovered),
                   "median_cm": round(sorted(distances)[len(distances) // 2], 2),
                   "max_cm": round(max(distances), 2)},
         "threshold": threshold, "artifacts": [radio_log], "grade": "B",
@@ -262,8 +262,10 @@ def check_radio_uplink(radio_log: Path | None) -> dict:
 
     written = sorted(float(row["t"]) for row in rows if row.get("write_ok") is True)
     failed = len(rows) - len(written)
-    value = {"frames_composed": len(rows), "frames_written": len(written),
-             "frames_failed": failed,
+    # ``frames_sent`` 与 ``frames_written`` 是同义的：schema §2.1 要求两个名字都在，
+    # 且 ``frames_sent == frames_written``、ratio 为 1 才算 pass。
+    value = {"frames_sent": len(written), "frames_written": len(written),
+             "frames_composed": len(rows), "frames_failed": failed,
              "write_ok_ratio": round(len(written) / len(rows), 4) if rows else None}
     if not written:
         return {"status": FAIL,
@@ -283,6 +285,8 @@ def check_radio_uplink(radio_log: Path | None) -> dict:
         window_max = max(window_max, right - left + 1)
 
     failures = []
+    if failed:
+        failures.append(f"{failed} 帧没写成功（write_ok_ratio {len(written) / len(rows):.3f}）")
     if rate < UPLINK_RATE_MIN_HZ:
         failures.append(f"频率 {rate:.2f}Hz < {UPLINK_RATE_MIN_HZ}")
     if window_max > UPLINK_WINDOW_MAX_FRAMES:
@@ -313,16 +317,19 @@ def check_vision_calibration(camera_path: Path | None) -> dict:
                 "threshold": threshold, "artifacts": [], "grade": "D"}
     import yaml
 
-    from jg_radar.config.schema import ConfigError, RadarConfig
+    from jg_radar.config.loader import load_config
 
     data = yaml.safe_load(camera_path.read_text(encoding="utf-8")) or {}
     digest = _sha256(camera_path)
+    # 用**运行时同一个 loader** 加载同一份 YAML（default.yaml 打底 + 这份覆盖），
+    # 这才叫「验收器与运行时同源」：只 from_dict 单文件会漏掉合并期才会暴露的错。
     try:
-        RadarConfig.from_dict(data)
-    except ConfigError as exc:
+        load_config(ROOT / "config" / "default.yaml", camera_path)
+    except Exception as exc:  # noqa: BLE001 —— ConfigError 之外的合并错误同样判 fail
         return {"status": FAIL,
                 "reason": f"这份 YAML 运行时加载不了（验收不能跑在运行时拒绝的配置上）：{exc}",
-                "value": {"config": str(camera_path), "sha256": digest},
+                "value": {"config": str(camera_path), "sha256": digest,
+                          "config_loads": False, "config_load_error": str(exc)},
                 "threshold": threshold, "artifacts": [], "grade": "D"}
 
     camera = data.get("camera") or {}
@@ -343,7 +350,9 @@ def check_vision_calibration(camera_path: Path | None) -> dict:
     if rms is None:
         missing.append("reproj_rms_px 实测值（transform.reproj_rms_px）")
 
-    value = {"config": str(camera_path), "sha256": digest, "camera_name": name,
+    value = {"config": str(camera_path), "sha256": digest,
+             "config_loads": True, "config_load_error": "",
+             "camera_name": name,
              "serial": serial, "calibrated_at": calibrated_at,
              "reproj_rms_px": rms, "limit_px": limit}
     if missing:
