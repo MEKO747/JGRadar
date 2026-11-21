@@ -23,6 +23,7 @@ from jg_radar.integration.referee_tx import (
     ENEMY_OFFSETS,
     MAX_RATE_HZ,
     MAX_FRAMES_PER_WINDOW,
+    RATE_SETTLE_S,
     OWN_OFFSETS,
     PAYLOAD_LEN,
     RADAR_ROLES,
@@ -442,3 +443,53 @@ def test_send_failure_carries_the_transport_reason():
     sender.tick()
     assert sender.stats.frames_sent == 0
     assert "SerialException" in (sender.last_write_error or "")
+
+
+def test_throttled_tick_reschedules_to_when_the_window_opens():
+    """闸门命中后不该白等一个周期：空洞要跟循环卡顿解耦。
+
+    等一个周期时，主循环卡 0.25s + 一个周期 = 0.46s，贴着 0.5s 断流判据；
+    改成等「最老那帧满 1 秒」，闸门造成的空洞硬性 ≤ 1.0 - 窗口跨度。
+    """
+    now = {"t": 0.0}
+    sent = []
+
+    def send(_payload: bytes) -> bool:
+        sent.append(now["t"])
+        return True
+
+    sender = RobotPositionSender(send, rate_hz=4.8, clock=lambda: now["t"])
+    # 真实会触发闸门的排程：主循环卡一下 + 紧跟一拍，5 帧挤在 0.85s 里；
+    # 到 1.7s 那一拍，窗口里还有 5 帧没满 1 秒，于是被挡掉。
+    for stamp in (0.0, 0.05, 0.25, 0.3, 0.35, 0.55, 0.75, 0.8, 0.85,
+                  1.05, 1.1, 1.4, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 2.1, 2.4):
+        now["t"] = stamp
+        sender.tick()
+    assert sender.stats.throttled >= 1, "这个排程本该触发闸门"
+    gaps = [b - a for a, b in zip(sent, sent[1:])]
+    # 闸门造成的空洞硬性 ≤ 1.0 - 窗口跨度，4.8Hz 下约 0.38s
+    assert max(gaps) <= 0.40, f"闸门后空洞 {max(gaps):.3f}s 太大"
+    for index, start in enumerate(sent):
+        inside = sum(1 for t in sent[index:] if t - start < 1.0)
+        assert inside <= MAX_FRAMES_PER_WINDOW
+
+
+def test_short_run_rate_is_flagged_as_provisional():
+    """2 秒跑出 5.0+ 的「频率」只是分母太小，自报必须标成仅供粗看。"""
+    sender, _sent, now = collect_sender(rate_hz=4.8)
+    rig = Rig()
+    for step in range(40):          # 2 秒、20Hz 循环
+        now["t"] = step * 0.05
+        sender.update(rig.frame(now["t"]))
+        sender.tick()
+    snapshot = sender.stats.as_dict(now=now["t"])
+    assert snapshot["rate_window_s"] < RATE_SETTLE_S
+    assert snapshot["rate_settled"] is False
+
+    for step in range(40, 700):     # 跑到 35 秒
+        now["t"] = step * 0.05
+        sender.update(rig.frame(now["t"]))
+        sender.tick()
+    snapshot = sender.stats.as_dict(now=now["t"])
+    assert snapshot["rate_settled"] is True
+    assert 4.6 < snapshot["effective_rate_hz"] < 4.9

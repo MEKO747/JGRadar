@@ -117,6 +117,9 @@ bash tools/start_radio_vision.sh red --radio-only --referee-tx --referee-serial 
   6 帧。现在发之前查一次「最近 1 秒已发帧数」，到 5 就丢这一拍（记 `throttled`），
   宁可少发也不超协议上限。
 - 统计里的 `max_frames_1s` 就是「最近 1 秒窗口最大帧数」，现场直接看它有没有贴线。
+- runner 每 2 秒自报里的 `effective_rate_hz` 带 `rate_window_s` 与 `rate_settled`：
+  跑不到 30 秒时 `rate_settled: false`，那个数只当粗看（2 秒 10 帧会跳出 5.2，
+  看着像超发，其实是分母太小）。
 - 验收算频用 `(n-1)/span`，**只在 ≥30 秒窗口下才有意义**：4.8Hz 跑 7 秒算出来是
   4.68，那是首尾两个半周期没算进分母，不是真的慢。短窗口验收器判 `blocked`。
 - `--referee-stale-policy drop`（默认）遇到过期坐标写 `(0,0)`；

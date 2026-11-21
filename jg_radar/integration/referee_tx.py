@@ -48,6 +48,10 @@ from jg_radar.types import FIELD_MAX_X_CM, FIELD_MAX_Y_CM, FrameOutput
 #: 协议规定的发送频率上限。代码里硬夹到它，配置写大了也只按它发。
 MAX_RATE_HZ = 5.0
 
+#: 频率自报要跑多久才稳定。分母是「首帧到现在」，跑 2 秒时 10 帧/2s 会跳出
+#: 5.0 以上那种吓人的数——那不是真的超发。低于这个时长，自报只当粗看。
+RATE_SETTLE_S = 30.0
+
 #: 任意 1 秒窗口内**最多**允许发出的帧数。这不是「平均频率」，是硬闸门：
 #: 节拍器只排程不拦截，主循环晚到一拍时（`due` 已过但只过了不到一个周期）
 #: 会出现两帧只隔几十毫秒，一秒钟就能挤进 6 帧。发之前必须查一次窗口。
@@ -187,6 +191,11 @@ class TxStats:
 
     def as_dict(self, now: float | None = None) -> dict:
         attempted = self.frames_composed
+        end = float(now) if now is not None else (
+            self.last_sent_at or self.first_tick_at or 0.0)
+        elapsed = 0.0
+        if self.first_tick_at is not None:
+            elapsed = max(0.0, end - self.first_tick_at)
         return {
             "frames_composed": self.frames_composed,
             "frames_sent": self.frames_sent,
@@ -196,6 +205,9 @@ class TxStats:
                 None if attempted == 0 else round(self.frames_sent / attempted, 4)
             ),
             "effective_rate_hz": round(self.effective_rate_hz(now), 3),
+            # 短窗口下的频率只当粗看：2 秒跑 10 帧会算出 5.0+，现场看着像超发
+            "rate_window_s": round(elapsed, 3),
+            "rate_settled": elapsed >= RATE_SETTLE_S,
             "max_frames_1s": self.max_frames_in_window,
             "dropped": dict(self.dropped),
             "sent_stale": dict(self.sent_stale),
@@ -298,7 +310,11 @@ class RobotPositionSender:
         # 硬闸门：宁可丢这一拍，也不突破协议的 5Hz 上限。
         if len(self._recent_sends) >= MAX_FRAMES_PER_WINDOW:
             self.stats.throttled += 1
-            self._next_due = now + self._period
+            # **窗口一松就发**，不是白等一个周期。等一个周期的话，主循环卡多久
+            # 空洞就多长（卡 0.25s + 一个周期 = 0.46s，贴着 0.5s 判据）；
+            # 按「最老那帧满 1 秒」重排，闸门造成的空洞硬性 ≤ 1.0 - 窗口跨度，
+            # 4.8Hz 下约 0.38s，与循环卡顿解耦。
+            self._next_due = self._recent_sends[0] + 1.0
             return False
 
         # 落后超过一个周期（主循环卡了）就重新对表，不补发一串。
