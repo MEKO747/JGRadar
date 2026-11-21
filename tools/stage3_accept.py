@@ -47,6 +47,10 @@ ACCURATE_RATIO_MIN = 0.90
 #: 真值窗口里只报一个点就判 pass，等于把「没测」当成「测得好」。
 ACCURACY_MIN_SAMPLES = 30
 UPLINK_RATE_MIN_HZ = 4.7
+#: 计频窗口下限。`(n-1)/span` 在短窗口下**系统性偏低**：4.8Hz 跑 7 秒只有 4.68，
+#: 4.7Hz 标称在 6.8 秒里也是 4.68——那不是链路慢，是分母把首尾两个半周期丢了。
+#: 窗口不够就判 `blocked`（证据不足），不许判 fail，也不许拿短窗口凑 pass。
+UPLINK_MIN_WINDOW_S = 30.0
 UPLINK_WINDOW_MAX_FRAMES = 5
 UPLINK_MAX_GAP_S = 0.5
 SWITCH_LATENCY_MAX_S = 0.4
@@ -315,6 +319,12 @@ def check_radio_uplink(radio_log: Path | None, *, session: str | None = None) ->
                 "threshold": threshold, "artifacts": [], "grade": "B"}
 
     span = written[-1] - written[0]
+    if span < UPLINK_MIN_WINDOW_S:
+        return {"status": BLOCKED,
+                "reason": f"观测窗口 {span:.2f}s < {UPLINK_MIN_WINDOW_S:g}s："
+                          "短窗口下 (n-1)/span 会系统性偏低，量不出真实频率",
+                "value": {**value, "window_s": round(span, 3)},
+                "threshold": threshold, "artifacts": [], "grade": "B"}
     rate = (len(written) - 1) / span if span > 0 else 0.0
     max_gap = max(b - a for a, b in zip(written, written[1:]))
     window_max, left = 0, 0
@@ -335,6 +345,7 @@ def check_radio_uplink(radio_log: Path | None, *, session: str | None = None) ->
     status = FAIL if failures else PASS
     return {"status": status, "reason": "；".join(failures),
             "value": {**value, "effective_rate_hz": round(rate, 3),
+                      "window_s": round(span, 3),
                       "max_frames_1s": window_max, "max_gap_s": round(max_gap, 3)},
             "threshold": threshold, "artifacts": [radio_log], "grade": "B"}
 
@@ -520,6 +531,14 @@ def build_report(*, radio_log: Path | None, truth: list[dict] | None,
         {"id": "fusion_switch", **check_fusion_switch(fusion_log, switch_event)},
     ]
 
+    # 证据等级上限压到每一项上。数据来源是合成/回放（--evidence-grade C）时，
+    # 每项都不许报 B——否则同一批数据在 pty 工具里是 C、在验收报告里是 B，
+    # 两套记录各说各话，正是当初要堵的坑。
+    cap_rank = _GRADE_RANK.get(evidence_grade, _GRADE_RANK["C"])
+    for item in checks:
+        if _GRADE_RANK.get(item.get("grade", "D"), 3) < cap_rank:
+            item["grade"] = evidence_grade
+
     # 硬约束：pass 必须带 value/threshold/artifact(含 sha256)/grade，缺一个按 fail 处理
     for item in checks:
         artifacts = [{"path": str(path), "sha256": _sha256(Path(path))}
@@ -613,19 +632,20 @@ def build_report(*, radio_log: Path | None, truth: list[dict] | None,
 # ---------------------------------------------------------------------------
 def _synthetic_inputs(tmp: Path, *, bad: bool) -> dict:
     tmp.mkdir(parents=True, exist_ok=True)
-    interval = 1.0 / 4.7
+    interval = 1.0 / 4.8
     base = 100.0
     lines = []
-    for index in range(60):
+    for index in range(150):
         offset_cm = 90 if bad else 20
         lines.append(json.dumps({"session_id": "selftest",
                                  "t": base + index * interval, "write_ok": True,
                                  "slots": {"B1": [500 + offset_cm, 700]}}))
     if bad:
+        # 断流 1.2s 之后继续 130 拍，总窗口 ≥30 秒（短窗口会被判 blocked）
         tail = [json.dumps({"session_id": "selftest",
                             "t": base + 20 * interval + 1.2 + i * interval,
                             "write_ok": True,
-                            "slots": {"B1": [540, 700]}}) for i in range(10)]
+                            "slots": {"B1": [540, 700]}}) for i in range(130)]
         lines = lines[:20] + tail
     radio = tmp / "radio.jsonl"
     radio.write_text("\n".join(lines) + "\n", encoding="utf-8")

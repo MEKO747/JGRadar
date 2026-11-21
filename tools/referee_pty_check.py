@@ -14,7 +14,10 @@ pty 就是内核 tty，行为和 ``/dev/ttyUSB0`` 一样，区别只有物理层
 证据等级 **C**：帧是合成注入的，不是空口；它证明实现正确性，
 **不进阶段 3 验收表**（真机空口与实拍仍是零样本）。
 
-退出码：全部断言通过 0，否则 1。
+结果里带 `runner.log`（runner 完整输出）与 `runner_output_tail`：失败时不用猜病因。
+没有 source ROS 环境会直接提示并退出 2，不会让 runner 莫名其妙 rc 1。
+
+退出码：全部断言通过 0，否则 1；没有 ROS 环境 2。
 """
 
 from __future__ import annotations
@@ -103,14 +106,16 @@ def parse_reports(stdout: str) -> list[dict]:
     return reports
 
 
-def mode_e2e(out_dir: Path) -> dict:
+def mode_e2e(out_dir: Path, seconds: float = 7.0) -> dict:
     session = f"pty_e2e_{datetime.now():%Y%m%d_%H%M%S}"
     log_path = out_dir / "referee_0305.jsonl"
-    proc, master, slave, slave_name = launch(session, log_path, seconds=7)
+    proc, master, slave, slave_name = launch(session, log_path, seconds=seconds)
     rx = bytearray()
     sent: set[int] = set()
     started = time.monotonic()
-    deadline = started + 10
+    # 收集窗口要比 runner 活得久：否则长跑的帧丢在 pty 缓冲区里，
+    # frames_on_wire 会莫名少一截（跑 35 秒却只数到 46 帧）。
+    deadline = started + seconds + 5
     while time.monotonic() < deadline and proc.poll() is None:
         drain(master, rx)
         elapsed = time.monotonic() - started
@@ -124,9 +129,10 @@ def mode_e2e(out_dir: Path) -> dict:
             os.write(master, marking_frame())
             sent.add(0x020C)
         time.sleep(0.02)
-    stdout = proc.communicate(timeout=15)[0]
+    stdout = proc.communicate(timeout=60)[0]
     os.close(master)
     os.close(slave)
+    runner_log = save_runner_output(out_dir, stdout)
 
     frames = SerialFrameDecoder().feed(bytes(rx))
     positions = [frame for frame in frames if frame.cmd_id == CMD_RADAR_POSITION]
@@ -137,6 +143,9 @@ def mode_e2e(out_dir: Path) -> dict:
         "session_id": session,
         "pty": slave_name,
         "runner_rc": proc.returncode,
+        "runner_log": runner_log["path"],
+        "runner_log_sha256": runner_log["sha256"],
+        "runner_output_tail": runner_log["tail"],
         "crashed": "Traceback" in stdout,
         "frames_on_wire": len(positions),
         "all_payload_48B": all(len(frame.payload) == 48 for frame in positions),
@@ -158,7 +167,8 @@ def mode_unplug(out_dir: Path) -> dict:
     time.sleep(2.0)
     os.close(master)          # 拔线：master 端消失
     os.close(slave)
-    stdout = proc.communicate(timeout=20)[0]
+    stdout = proc.communicate(timeout=60)[0]
+    runner_log = save_runner_output(out_dir, stdout)
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
             if line.strip()] if log_path.is_file() else []
     good = [row for row in rows if row.get("write_ok") is True]
@@ -167,6 +177,9 @@ def mode_unplug(out_dir: Path) -> dict:
         "session_id": session,
         "pty": slave_name,
         "runner_rc": proc.returncode,
+        "runner_log": runner_log["path"],
+        "runner_log_sha256": runner_log["sha256"],
+        "runner_output_tail": runner_log["tail"],
         "crashed": "Traceback" in stdout,
         "rows": len(rows),
         "write_ok_true": len(good),
@@ -178,10 +191,33 @@ def mode_unplug(out_dir: Path) -> dict:
     }
 
 
+def preflight() -> str | None:
+    """没有 ROS 环境就直接说清楚，别让 runner 莫名其妙 rc 1。"""
+    try:
+        import rclpy  # noqa: F401
+        import radar_parse_em_wave.msg  # noqa: F401
+    except Exception as exc:  # noqa: BLE001
+        return (f"当前 Python 里没有可用的 ROS 2 环境（{type(exc).__name__}: {exc}）。"
+                "请先 source ~/.jg_env.zsh、/opt/ros/jazzy/setup.zsh、"
+                "build/radio/install/local_setup.zsh，再用 python3 运行本工具")
+    return None
+
+
+def save_runner_output(out_dir: Path, stdout: str) -> dict:
+    """把 runner 的输出整段落盘。失败时这是唯一的病因线索。"""
+    path = out_dir / "runner.log"
+    path.write_text(stdout, encoding="utf-8")
+    lines = [line for line in stdout.splitlines() if line.strip()]
+    return {"path": str(path.relative_to(ROOT)), "sha256": sha256(path),
+            "tail": lines[-30:]}
+
+
 def verdict(mode: str, result: dict) -> tuple[bool, list[str]]:
     problems: list[str] = []
     if result["runner_rc"] != 0:
-        problems.append(f"runner 退出码 {result['runner_rc']}")
+        tail = result.get("runner_output_tail") or []
+        detail = tail[-1] if tail else "（runner 没有任何输出）"
+        problems.append(f"runner 退出码 {result['runner_rc']}：{detail}")
     if result["crashed"]:
         problems.append("runner 打了 Traceback")
     if not result["log_session_matches"]:
@@ -213,11 +249,19 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--mode", choices=("e2e", "unplug"), required=True)
     parser.add_argument("--out", default=str(ROOT / "out" / "referee_pty"))
+    parser.add_argument("--seconds", type=float, default=7.0,
+                        help="e2e 跑多久。验收频率要 ≥30 秒窗口，短跑只能证明通路")
     args = parser.parse_args(argv)
+
+    hint = preflight()
+    if hint:
+        print(json.dumps({"error": "ROS 环境不可用", "hint": hint}, ensure_ascii=False))
+        return 2
 
     out_dir = Path(args.out) / datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
-    result = (mode_e2e if args.mode == "e2e" else mode_unplug)(out_dir)
+    result = (mode_e2e(out_dir, args.seconds) if args.mode == "e2e"
+              else mode_unplug(out_dir))
     passed, problems = verdict(args.mode, result)
     report = {
         "schema": "referee-pty/1",

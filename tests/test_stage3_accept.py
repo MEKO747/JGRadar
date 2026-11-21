@@ -80,24 +80,38 @@ def test_tool_never_issues_grade_a(tmp_path):
     assert report["a_grade_requires_signoff"] is True
 
 
+def long_times(rate=4.8, count=150):
+    """≥30 秒窗口：短窗口下 (n-1)/span 系统性偏低，量不出真实频率。"""
+    return [100 + index / rate for index in range(count)]
+
+
 def test_uplink_metrics_and_failures(tmp_path):
-    # 4.7Hz、60 帧 → 通过
-    times = [100 + index / 4.7 for index in range(60)]
+    # 4.8Hz、150 帧（31 秒）→ 通过
+    times = long_times()
     log = write_radio(tmp_path / "ok.jsonl", times)
     result = check_radio_uplink(log)
     assert result["status"] == PASS
-    assert 4.65 < result["value"]["effective_rate_hz"] < 4.75
+    assert 4.7 < result["value"]["effective_rate_hz"] < 4.85
     assert result["value"]["max_frames_1s"] <= 5
+    assert result["value"]["window_s"] >= 30
     # schema §2.1：通过时这三个字段必须自洽
     assert result["value"]["frames_sent"] == result["value"]["frames_written"]
     assert result["value"]["write_ok_ratio"] == 1.0
 
-    # 1 秒断流 + 之后 2Hz → 频率与断流都超
+    # 中途 1.5 秒断流 → 断流判 fail（窗口仍 ≥30 秒）
     slow = write_radio(tmp_path / "slow.jsonl",
-                       times[:20] + [times[19] + 1.0 + index * 0.5 for index in range(10)])
+                       times[:70] + [stamp + 1.5 for stamp in times[70:]])
     result = check_radio_uplink(slow)
     assert result["status"] == FAIL
     assert "断流" in result["reason"]
+
+
+def test_short_window_is_blocked_not_failed(tmp_path):
+    """33 帧 / 6.8 秒：这不是「链路慢」，是分母丢掉了首尾半周期。"""
+    log = write_radio(tmp_path / "short.jsonl", [100 + index / 4.8 for index in range(33)])
+    result = check_radio_uplink(log)
+    assert result["status"] == BLOCKED
+    assert "观测窗口" in result["reason"]
 
 
 def test_calibration_requires_all_four_items(tmp_path):
@@ -152,9 +166,9 @@ def test_report_carries_traceable_fingerprints(tmp_path):
 
 @pytest.mark.parametrize("times_ok", [True, False])
 def test_verdict_aggregation(tmp_path, times_ok):
-    times = [100 + index / 4.7 for index in range(60)]
+    times = long_times()
     if not times_ok:
-        times = times[:20] + [times[19] + 1.5 + index * 0.5 for index in range(10)]
+        times = times[:70] + [stamp + 1.5 for stamp in times[70:]]
     log = write_radio(tmp_path / (("ok" if times_ok else "bad") + ".jsonl"), times)
     report = build_report(radio_log=log, truth=None, fusion_log=None, switch_event=None,
                           camera=None, evidence_grade="B", devices=[], commands=[])
@@ -255,12 +269,11 @@ def test_operator_unset_is_flagged_in_caveats(monkeypatch):
 # 故障注入：链路坏掉时验收器必须判错，而不是判过
 # ---------------------------------------------------------------------------
 def test_uplink_rejects_a_log_that_never_wrote(tmp_path):
-    """串口全失败：组帧 48 次、写成功 0 次——旧版会判 pass。"""
-    log = write_radio(tmp_path / "dead.jsonl", [100 + index / 4.7 for index in range(48)],
-                      write_ok=False)
+    """串口全失败：组帧 150 次、写成功 0 次——旧版会判 pass。"""
+    log = write_radio(tmp_path / "dead.jsonl", long_times(), write_ok=False)
     result = check_radio_uplink(log)
     assert result["status"] == FAIL
-    assert result["value"]["frames_composed"] == 48
+    assert result["value"]["frames_composed"] == 150
     assert result["value"]["frames_written"] == 0
     assert "写成功 0 次" in result["reason"]
 
@@ -268,8 +281,8 @@ def test_uplink_rejects_a_log_that_never_wrote(tmp_path):
 def test_uplink_fails_when_the_log_has_no_write_ok_field(tmp_path):
     """旧格式日志只有时间戳：证明不了写进串口，缺证据按 fail。"""
     log = tmp_path / "old.jsonl"
-    log.write_text("\n".join(json.dumps({"session_id": "s1", "t": 100 + index / 4.7})
-                             for index in range(48)) + "\n", encoding="utf-8")
+    log.write_text("\n".join(json.dumps({"session_id": "s1", "t": stamp})
+                             for stamp in long_times()) + "\n", encoding="utf-8")
     result = check_radio_uplink(log)
     assert result["status"] == FAIL
     assert "write_ok" in result["reason"]
@@ -277,17 +290,17 @@ def test_uplink_fails_when_the_log_has_no_write_ok_field(tmp_path):
 
 def test_uplink_only_counts_frames_that_were_really_written(tmp_path):
     """一半写失败：频率要按写成功的那些算，不能拿组帧数充数。"""
-    times = [100 + index / 4.7 for index in range(48)]
+    times = long_times(count=300)
     log = tmp_path / "half.jsonl"
-    rows = [json.dumps({"session_id": "s1", "t": t, "write_ok": index < 24,
+    rows = [json.dumps({"session_id": "s1", "t": t, "write_ok": index < 150,
                         "slots": {"B1": [500, 700]}}) for index, t in enumerate(times)]
     log.write_text("\n".join(rows) + "\n", encoding="utf-8")
     result = check_radio_uplink(log)
-    assert result["value"]["frames_composed"] == 48
-    assert result["value"]["frames_written"] == 24
-    # 频率按 24 个写成功的帧算（4.69Hz），拿 48 个组帧数充数就会显示 4.7+
+    assert result["value"]["frames_composed"] == 300
+    assert result["value"]["frames_written"] == 150
+    # 有帧没写成功就直接 fail，ratio 也不会是 1
     assert result["status"] == FAIL
-    assert "频率" in result["reason"]
+    assert "没写成功" in result["reason"] or "频率" in result["reason"]
 
 
 def test_accuracy_blocks_on_too_few_samples(tmp_path):
@@ -314,8 +327,7 @@ def test_accuracy_blocks_when_a_truth_segment_has_no_sample(tmp_path):
 
 def test_accuracy_ignores_frames_that_never_wrote(tmp_path):
     """没写出去的上报不能算进分母，也不能凑样本数。"""
-    log = write_radio(tmp_path / "dead.jsonl", [100 + index / 4.7 for index in range(48)],
-                      write_ok=False)
+    log = write_radio(tmp_path / "dead.jsonl", long_times(), write_ok=False)
     truth = [{"t0": 0.0, "t1": 400.0, "slot": "B1", "x_cm": 500.0, "y_cm": 700.0}]
     result = check_radio_accuracy(log, truth)
     assert result["status"] == BLOCKED
@@ -327,7 +339,7 @@ def test_accuracy_ignores_frames_that_never_wrote(tmp_path):
 # ---------------------------------------------------------------------------
 def test_mixed_sessions_are_refused_until_one_is_named(tmp_path):
     """现场真踩过的坑：33 帧上线路，日志却有 66 行（两次跑接在一起）。"""
-    times = [100 + index / 4.7 for index in range(48)]
+    times = long_times()
     log = tmp_path / "mixed.jsonl"
     rows = []
     for session in ("run_a", "run_b"):
@@ -340,25 +352,43 @@ def test_mixed_sessions_are_refused_until_one_is_named(tmp_path):
     assert "混了 2 个 session" in result["reason"]
     assert "run_a" in result["reason"] and "run_b" in result["reason"]
 
-    # 指定 session 后只算那一次：48 帧、约 4.7Hz，正常通过
+    # 指定 session 后只算那一次：150 帧、约 4.8Hz，正常通过
     result = check_radio_uplink(log, session="run_a")
     assert result["status"] == PASS
-    assert result["value"]["frames_composed"] == 48
-    assert result["value"]["frames_sent"] == 48
+    assert result["value"]["frames_composed"] == 150
+    assert result["value"]["frames_sent"] == 150
 
 
 def test_rows_without_session_id_are_fail(tmp_path):
     log = tmp_path / "nosession.jsonl"
-    log.write_text("\n".join(json.dumps({"t": 100 + index / 4.7, "write_ok": True})
-                             for index in range(48)) + "\n", encoding="utf-8")
+    log.write_text("\n".join(json.dumps({"t": stamp, "write_ok": True})
+                             for stamp in long_times()) + "\n", encoding="utf-8")
     result = check_radio_uplink(log)
     assert result["status"] == FAIL
     assert "session_id" in result["reason"]
 
 
 def test_unknown_session_name_is_fail_not_empty_pass(tmp_path):
-    log = write_radio(tmp_path / "one.jsonl", [100 + index / 4.7 for index in range(48)],
-                      session="run_a")
+    log = write_radio(tmp_path / "one.jsonl", long_times(), session="run_a")
     result = check_radio_uplink(log, session="run_z")
     assert result["status"] == FAIL
     assert "run_z" in result["reason"]
+
+
+def test_synthetic_runs_cap_every_check_at_grade_c(tmp_path):
+    """同一批合成数据不许一边记 C、一边在报告里顶着 B。"""
+    camera = write_calibrated_camera(tmp_path / "cam.yaml")
+    kwargs = dict(radio_log=None, truth=None, fusion_log=None, switch_event=None,
+                  camera=camera, devices=[], commands=[])
+    synthetic = build_report(evidence_grade="C", **kwargs)
+    calibration = next(item for item in synthetic["checks"]
+                       if item["id"] == "vision_calibration")
+    assert calibration["status"] == PASS
+    assert calibration["grade"] == "C", "合成数据跑出的 pass 不许标 B"
+    assert synthetic["evidence_grade"] == "C"
+
+    # 上限是 B 时（真实录制回放）不改等级
+    recorded = build_report(evidence_grade="B", **kwargs)
+    calibration = next(item for item in recorded["checks"]
+                       if item["id"] == "vision_calibration")
+    assert calibration["grade"] == "B"

@@ -103,7 +103,8 @@ zsh -c 'source ~/.jg_env.zsh; source /opt/ros/jazzy/setup.zsh; \
 
 - `frames_sent > 0` 且 `frames_failed == 0`——**只认串口写成功的帧**；`frames_composed`
   明显大于 `frames_sent` 就说明有帧只组了没发出去
-- `effective_rate_hz ≥ 4.7`
+- `effective_rate_hz ≥ 4.7`，且**统计窗口 ≥30 秒**（短窗口下 `(n-1)/span` 系统性偏低，
+  4.8Hz 跑 7 秒只有 4.68——那不是链路慢，是分母丢了首尾半周期；窗口不够判 `blocked`）
 - `max_frames_1s ≤ 5`（协议上限 5Hz）；`throttled > 0` 说明触发了硬闸门，属正常保护
 - `out/referee_live.jsonl` 每行都有 `write_ok: true`，且**同一次运行的行 `session_id` 一致**
   （日志是 append 的，跨会话混在一起会让帧数翻倍；验收时用 `--session <id>`）
