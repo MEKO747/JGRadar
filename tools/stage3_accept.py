@@ -43,6 +43,9 @@ SCHEMA = "stage3-accept/1"
 # ---- 判据（改这里 = 改验收标准，必须有人拍板） ----
 ACCURATE_M = 0.8
 ACCURATE_RATIO_MIN = 0.90
+#: 定位准确率的最少有效样本数。样本太少时 1/1 = 100% 也能过，那是假象：
+#: 真值窗口里只报一个点就判 pass，等于把「没测」当成「测得好」。
+ACCURACY_MIN_SAMPLES = 30
 UPLINK_RATE_MIN_HZ = 4.7
 UPLINK_WINDOW_MAX_FRAMES = 5
 UPLINK_MAX_GAP_S = 0.5
@@ -155,8 +158,31 @@ def load_truth(path: Path) -> list[dict]:
     return rows
 
 
+def _load_log(path: Path) -> list[dict]:
+    """读 JSONL。坏行直接抛，不静默跳过——验收器不能替人补数据。"""
+    rows = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}:{number} 不是合法 JSON：{exc}") from exc
+    return rows
+
+
+def _missing_write_ok(rows: list[dict]) -> int:
+    """数出没有 ``write_ok`` 字段的行。
+
+    旧日志只有组帧时间戳，无法区分「组了帧」和「真的写进串口」。按
+    「缺证据 = 不通过」处理，不能当 pass。
+    """
+    return sum(1 for row in rows if "write_ok" not in row)
+
+
 def check_radio_accuracy(radio_log: Path | None, truth: list[dict] | None) -> dict:
-    threshold = f"d<{ACCURATE_M}m 比例 >= {ACCURATE_RATIO_MIN:.0%}"
+    threshold = (f"d<{ACCURATE_M}m 比例 >= {ACCURATE_RATIO_MIN:.0%}，"
+                 f"有效上报 >= {ACCURACY_MIN_SAMPLES} 个且每个真值段至少 1 个")
     if radio_log is None or not radio_log.is_file():
         return {"status": BLOCKED, "reason": "缺少 --radio-log", "value": None,
                 "threshold": threshold, "artifacts": [], "grade": "D"}
@@ -164,24 +190,45 @@ def check_radio_accuracy(radio_log: Path | None, truth: list[dict] | None) -> di
         return {"status": BLOCKED, "reason": "缺少 --truth：没有真值就算不出 d",
                 "value": None, "threshold": threshold, "artifacts": [], "grade": "D"}
 
+    rows = _load_log(radio_log)
+    if _missing_write_ok(rows):
+        return {"status": FAIL,
+                "reason": f"{_missing_write_ok(rows)}/{len(rows)} 行日志缺 write_ok："
+                          "无法证明这些坐标真的发给了服务器",
+                "value": {"rows": len(rows)}, "threshold": threshold,
+                "artifacts": [], "grade": "B"}
+
     distances = []
-    for line in radio_log.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
+    per_segment: dict[int, int] = {}
+    for row in rows:
+        if row.get("write_ok") is not True:
             continue
-        row = json.loads(line)
         t = float(row["t"])
         for slot, position in (row.get("slots") or {}).items():
             x_cm, y_cm = float(position[0]), float(position[1])
             if x_cm == 0.0 and y_cm == 0.0:
                 continue  # (0,0) = 未发送，不构成判定
-            for segment in truth:
+            for index, segment in enumerate(truth):
                 if segment["slot"] == slot and segment["t0"] <= t < segment["t1"]:
                     distances.append(math.hypot(x_cm - segment["x_cm"], y_cm - segment["y_cm"]))
+                    per_segment[index] = per_segment.get(index, 0) + 1
                     break
-    if not distances:
-        return {"status": BLOCKED, "reason": "真值时间段内没有任何有效上报",
-                "value": {"samples": 0}, "threshold": threshold,
-                "artifacts": [], "grade": "B"}
+
+    uncovered = [segment for index, segment in enumerate(truth) if per_segment.get(index, 0) == 0]
+    if not distances or uncovered:
+        reason = (f"{len(uncovered)}/{len(truth)} 个真值段一个采样点都没有"
+                  if uncovered else "真值时间段内没有任何有效上报")
+        return {"status": BLOCKED, "reason": reason,
+                "value": {"samples": len(distances), "truth_segments": len(truth),
+                          "segments_covered": len(truth) - len(uncovered)},
+                "threshold": threshold, "artifacts": [], "grade": "B"}
+    if len(distances) < ACCURACY_MIN_SAMPLES:
+        return {"status": BLOCKED,
+                "reason": f"有效上报只有 {len(distances)} 个，少于 {ACCURACY_MIN_SAMPLES} 个："
+                          "样本不足时百分比没有意义",
+                "value": {"samples": len(distances), "truth_segments": len(truth),
+                          "segments_covered": len(truth) - len(uncovered)},
+                "threshold": threshold, "artifacts": [], "grade": "B"}
 
     accurate = sum(1 for d in distances if d < ACCURATE_M * 100)
     ratio = accurate / len(distances)
@@ -189,6 +236,7 @@ def check_radio_accuracy(radio_log: Path | None, truth: list[dict] | None) -> di
     return {
         "status": status, "reason": "" if status == PASS else f"准确率 {ratio:.1%} 低于阈值",
         "value": {"samples": len(distances), "accurate_ratio": round(ratio, 4),
+                  "truth_segments": len(truth), "segments_covered": len(truth) - len(uncovered),
                   "median_cm": round(sorted(distances)[len(distances) // 2], 2),
                   "max_cm": round(max(distances), 2)},
         "threshold": threshold, "artifacts": [radio_log], "grade": "B",
@@ -199,22 +247,38 @@ def check_radio_accuracy(radio_log: Path | None, truth: list[dict] | None) -> di
 # 2) 无线电上报节拍
 # ---------------------------------------------------------------------------
 def check_radio_uplink(radio_log: Path | None) -> dict:
-    threshold = f">={UPLINK_RATE_MIN_HZ}Hz、窗口<={UPLINK_WINDOW_MAX_FRAMES}、gap<={UPLINK_MAX_GAP_S}s"
+    threshold = (f">={UPLINK_RATE_MIN_HZ}Hz、窗口<={UPLINK_WINDOW_MAX_FRAMES}、"
+                 f"gap<={UPLINK_MAX_GAP_S}s（只认 write_ok:true）")
     if radio_log is None or not radio_log.is_file():
         return {"status": BLOCKED, "reason": "缺少 --radio-log", "value": None,
                 "threshold": threshold, "artifacts": [], "grade": "D"}
-    times = sorted(float(json.loads(line)["t"])
-                   for line in radio_log.read_text(encoding="utf-8").splitlines() if line.strip())
-    if len(times) < 2:
-        return {"status": BLOCKED, "reason": "帧数不足", "value": {"frames": len(times)},
+    rows = _load_log(radio_log)
+    if _missing_write_ok(rows):
+        return {"status": FAIL,
+                "reason": f"{_missing_write_ok(rows)}/{len(rows)} 行缺 write_ok："
+                          "只有组帧时间戳证明不了真的写进了串口",
+                "value": {"rows": len(rows)}, "threshold": threshold,
+                "artifacts": [], "grade": "B"}
+
+    written = sorted(float(row["t"]) for row in rows if row.get("write_ok") is True)
+    failed = len(rows) - len(written)
+    value = {"frames_composed": len(rows), "frames_written": len(written),
+             "frames_failed": failed,
+             "write_ok_ratio": round(len(written) / len(rows), 4) if rows else None}
+    if not written:
+        return {"status": FAIL,
+                "reason": f"组帧 {len(rows)} 次、写成功 0 次：串口链路没通，不算发送",
+                "value": value, "threshold": threshold, "artifacts": [], "grade": "B"}
+    if len(written) < 2:
+        return {"status": BLOCKED, "reason": "写成功的帧数不足", "value": value,
                 "threshold": threshold, "artifacts": [], "grade": "B"}
 
-    span = times[-1] - times[0]
-    rate = (len(times) - 1) / span if span > 0 else 0.0
-    max_gap = max(b - a for a, b in zip(times, times[1:]))
+    span = written[-1] - written[0]
+    rate = (len(written) - 1) / span if span > 0 else 0.0
+    max_gap = max(b - a for a, b in zip(written, written[1:]))
     window_max, left = 0, 0
-    for right, t in enumerate(times):
-        while t - times[left] >= 1.0:
+    for right, t in enumerate(written):
+        while t - written[left] >= 1.0:
             left += 1
         window_max = max(window_max, right - left + 1)
 
@@ -227,7 +291,7 @@ def check_radio_uplink(radio_log: Path | None) -> dict:
         failures.append(f"最大断流 {max_gap:.2f}s > {UPLINK_MAX_GAP_S}s")
     status = FAIL if failures else PASS
     return {"status": status, "reason": "；".join(failures),
-            "value": {"frames": len(times), "effective_rate_hz": round(rate, 3),
+            "value": {**value, "effective_rate_hz": round(rate, 3),
                       "max_frames_1s": window_max, "max_gap_s": round(max_gap, 3)},
             "threshold": threshold, "artifacts": [radio_log], "grade": "B"}
 
@@ -236,41 +300,60 @@ def check_radio_uplink(radio_log: Path | None) -> dict:
 # 3) 视觉标定四要件
 # ---------------------------------------------------------------------------
 def check_vision_calibration(camera_path: Path | None) -> dict:
-    threshold = "序列号 + 重标日期 + reproj_rms_px 实测 + 文件 sha256"
+    """标定四要件，**全部取运行时接受的字段**。
+
+    这一步以前读 ``camera.reproj_rms_px`` 和顶层 ``calibration.serial``——
+    那两个键运行时根本不接受（``_build`` 遇未知键直接抛 ``ConfigError``）。
+    于是「验收 pass、主程序起不来」。现在先拿 ``RadarConfig.from_dict``
+    跑一遍，验收器和运行时用同一份 schema，不再各说各话。
+    """
+    threshold = "序列号 + 重标日期 + reproj_rms_px 实测 + 文件 sha256（运行时字段）"
     if camera_path is None or not camera_path.is_file():
         return {"status": BLOCKED, "reason": "缺少相机配置", "value": None,
                 "threshold": threshold, "artifacts": [], "grade": "D"}
     import yaml
 
+    from jg_radar.config.schema import ConfigError, RadarConfig
+
     data = yaml.safe_load(camera_path.read_text(encoding="utf-8")) or {}
-    camera = data.get("camera") or {}
-    calibration = data.get("calibration") or {}
     digest = _sha256(camera_path)
+    try:
+        RadarConfig.from_dict(data)
+    except ConfigError as exc:
+        return {"status": FAIL,
+                "reason": f"这份 YAML 运行时加载不了（验收不能跑在运行时拒绝的配置上）：{exc}",
+                "value": {"config": str(camera_path), "sha256": digest},
+                "threshold": threshold, "artifacts": [], "grade": "D"}
+
+    camera = data.get("camera") or {}
+    transform = data.get("transform") or {}
+    name = str(camera.get("name", "") or "")
+    serial = str(camera.get("serial", "") or "").strip()
+    calibrated_at = str(camera.get("calibrated_at", "") or "").strip()
+    rms = transform.get("reproj_rms_px")
+    limit = float(transform.get("reproj_rms_max_px", 3.0) or 3.0)
 
     missing = []
-    name = str(camera.get("name", "") or "")
     if not name or name.lower() in ("unselected", "placeholder"):
-        missing.append("相机序列号（name 仍是占位）")
-    if camera.get("reproj_rms_px") is None:
-        missing.append("reproj_rms_px 实测值")
-    if not str(calibration.get("serial", "") or "").strip():
-        missing.append("calibration.serial")
-    if not str(calibration.get("date", "") or "").strip():
-        missing.append("calibration.date")
+        missing.append("相机型号（camera.name 仍是占位）")
+    if not serial:
+        missing.append("相机序列号（camera.serial）")
+    if not calibrated_at:
+        missing.append("重标日期（camera.calibrated_at）")
+    if rms is None:
+        missing.append("reproj_rms_px 实测值（transform.reproj_rms_px）")
 
     value = {"config": str(camera_path), "sha256": digest, "camera_name": name,
-             "reproj_rms_px": camera.get("reproj_rms_px"),
-             "calibration_serial": calibration.get("serial"),
-             "calibration_date": calibration.get("date")}
+             "serial": serial, "calibrated_at": calibrated_at,
+             "reproj_rms_px": rms, "limit_px": limit}
     if missing:
         return {"status": BLOCKED, "reason": "标定证据不全：" + "、".join(missing),
                 "value": value, "threshold": threshold, "artifacts": [], "grade": "D"}
-    rms = float(camera["reproj_rms_px"])
-    limit = float(camera.get("reproj_rms_max_px", 3.0) or 3.0)
+    rms = float(rms)
     status = PASS if rms <= limit else FAIL
     return {"status": status,
             "reason": "" if status == PASS else f"reproj_rms_px {rms} > 上限 {limit}",
-            "value": {**value, "limit_px": limit}, "threshold": threshold,
+            "value": value, "threshold": threshold,
             "artifacts": [camera_path], "grade": "B"}
 
 
@@ -440,6 +523,8 @@ def build_report(*, radio_log: Path | None, truth: list[dict] | None,
                           "slots": sorted({seg["slot"] for seg in truth})})
 
     caveats = ["本报告只验证四项判据，不证明检测精度；内置 UVC 画面不算视觉证据。"]
+    caveats.append("write_ok 只证明数据写进了串口，不证明裁判服务器收到——"
+                   "第三态在本地不可观测，只能由裁判端/小地图确认。")
     operator_name, operator_missing = resolve_operator(operator)
     if operator_missing:
         caveats.append("operator 未填：--operator 与 git config user.name 都没拿到，"
@@ -486,9 +571,11 @@ def _synthetic_inputs(tmp: Path, *, bad: bool) -> dict:
     for index in range(60):
         offset_cm = 90 if bad else 20
         lines.append(json.dumps({"t": base + index * interval,
+                                 "write_ok": True,
                                  "slots": {"B1": [500 + offset_cm, 700]}}))
     if bad:
         tail = [json.dumps({"t": base + 20 * interval + 1.2 + i * interval,
+                            "write_ok": True,
                             "slots": {"B1": [540, 700]}}) for i in range(10)]
         lines = lines[:20] + tail
     radio = tmp / "radio.jsonl"
@@ -512,11 +599,12 @@ def _synthetic_inputs(tmp: Path, *, bad: bool) -> dict:
 
     camera = tmp / "camera.yaml"
     if bad:
-        camera.write_text("camera:\n  name: unselected\n  reproj_rms_px: null\n", encoding="utf-8")
+        camera.write_text("camera:\n  name: unselected\n"
+                          "transform:\n  reproj_rms_px: null\n", encoding="utf-8")
     else:
-        camera.write_text("camera:\n  name: MV-CS060-10GC\n  reproj_rms_px: 0.62\n"
-                          "  reproj_rms_max_px: 3.0\n"
-                          "calibration:\n  serial: 'DA1234567'\n  date: '2026-12-01'\n",
+        camera.write_text("camera:\n  name: MV-CS060-10GC\n  serial: 'DA1234567'\n"
+                          "  calibrated_at: '2026-12-01'\n"
+                          "transform:\n  reproj_rms_px: 0.62\n  reproj_rms_max_px: 3.0\n",
                           encoding="utf-8")
     return {"radio_log": radio, "truth": load_truth(truth_path), "fusion_log": fusion,
             "switch_event": ("B1", 100.2), "camera": camera}

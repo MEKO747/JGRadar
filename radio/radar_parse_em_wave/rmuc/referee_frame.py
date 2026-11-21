@@ -81,9 +81,13 @@ class RadarPositionWriter:
             raise RuntimeError("缺少 pyserial：pip install pyserial") from exc
         self._serial = serial.Serial(port, self.baudrate, timeout=0.2)
 
-    def __call__(self, payload: bytes) -> None:
-        """``RobotPositionSender`` 的发送回调：数据段进，串口出。"""
-        self.write(payload)
+    def __call__(self, payload: bytes) -> bool:
+        """``RobotPositionSender`` 的发送回调：数据段进，串口出。
+
+        必须返回「写成功了没有」：发送端只有拿到 ``True`` 才把它算进
+        ``frames_sent``。返回 ``None`` 的旧写法会让写失败被当成发送。
+        """
+        return self.write(payload) is not None
 
     def write(self, payload: bytes) -> bytes | None:
         """包帧并写出，返回写出的完整帧（离线验证时方便断言）。"""

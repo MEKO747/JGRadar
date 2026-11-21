@@ -109,9 +109,12 @@ bash tools/start_radio_vision.sh red --radio-only --referee-tx --referee-serial 
 
 - 默认 **4.7 Hz**（`referee_tx.DEFAULT_RATE_HZ`），`--referee-rate-hz` 可以写大，
   但代码会夹到 5 Hz 并在日志里说明。为什么不是 4.8：节拍按相位对齐后，4.8 Hz 下
-  某些 1 秒窗口正好落满 5 帧，压在上限线上零余量；4.7 Hz 下最坏窗口仍是 5 帧
-  （6 帧要求 5 个周期 ≤1 s，即 ≥5 Hz，结构上做不到），平均留出约 6% 余量，
+  某些 1 秒窗口正好落满 5 帧，压在上限线上零余量；4.7 Hz 平均留出约 6% 余量，
   代价是累积到阈值的时间约 +2%，可以忽略。
+- **但平均频率不保证窗口密度**：节拍器只排程、不拦截。主循环晚到一拍时
+  （`due` 已过但只过了不到一个周期）会连发两帧、只隔几十毫秒，一秒钟能挤进
+  6 帧。现在发之前查一次「最近 1 秒已发帧数」，到 5 就丢这一拍（记 `throttled`），
+  宁可少发也不超协议上限。
 - 统计里的 `max_frames_1s` 就是「最近 1 秒窗口最大帧数」，现场直接看它有没有贴线。
 - `--referee-stale-policy drop`（默认）遇到过期坐标写 `(0,0)`；
   `send_stale` 则照发旧值并计入 `sent_stale`。默认选 `drop`：发过期坐标大概率
@@ -120,13 +123,19 @@ bash tools/start_radio_vision.sh red --radio-only --referee-tx --referee-serial 
 - `--referee-stale-after` 是「多少秒算过期」，默认 0.5 秒，和仲裁器的
   `stale_mark_s` 对齐。
 - `--referee-log out/referee_0305.jsonl` 把每一帧的内容（四个槽位、年龄、
-  策略）落盘，用于对账和论文统计。
-- 串口打不开时**不会拖垮视觉**：启动时打印 `referee_tx_error` 并退化成只计数；
-  运行中拔线则记一次失败后停止尝试（`failed` 置位），统计里看得见。
+  策略）落盘，用于对账和论文统计。**每行都带 `write_ok`**：`true` = 串口写成功，
+  `false` = 只组了帧没写出去（附 `write_error` 与 `write_mode`）。验收器只认
+  `write_ok: true` 的行——只有时间戳的旧日志一律判 fail。
+- 串口打不开时**不会拖垮视觉**：启动时打印 `referee_tx_error` 并退化成干跑
+  （`write_mode: dry_run`，`write_ok` 恒为 false，**不算发送**）；
+  运行中拔线则每次写失败都记一次（`frames_failed`），统计里看得见。
 
 线格式（`0xA5` 帧头 + CRC8 + CRC16）在 `radio/radar_parse_em_wave/rmuc/referee_frame.py`，
-和接收方向共用同一份 CRC 表。统计字段：`frames_sent`、`effective_rate_hz`、
+和接收方向共用同一份 CRC 表。统计字段分三态：`frames_composed`（组帧）、
+`frames_sent`（**串口写成功**）、`frames_failed`（写失败），另有 `throttled`
+（被 1 秒窗口硬闸门挡掉的拍）、`write_ok_ratio`、`effective_rate_hz`、
 `dropped`（每台因无坐标或过期写成 `(0,0)` 的次数）、`sent_stale`、`last_max_age_s`。
+**只有 `frames_sent` 能当成「发出去了」**。
 
 联调验收：连续 10 秒无信号时真实发送 48 帧（4.806 Hz）、每台写 `(0,0)`；
 断流 0.6 秒时 `drop` 下该台为 `(0,0)`、`send_stale` 下发出旧值。

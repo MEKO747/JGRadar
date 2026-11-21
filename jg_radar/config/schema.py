@@ -104,6 +104,16 @@ class CameraConfig:
     """相机内参与采集参数。相机未选型前保持占位值。"""
 
     name: str = "unselected"
+    """相机型号，例如 ``MV-CS060-10GC``；``unselected`` = 尚未选型。"""
+    serial: str = ""
+    """相机序列号。标定验收要它，**必须和真机铭牌一致**；空 = 还没回填。
+
+    这个字段放在这里而不是另起一个 ``calibration:`` 节点，是因为整份配置
+    走「未知键一律报错」：验收器若读一个运行时根本不接受的节点，就会出现
+    「验收 pass、主程序启动失败」——两套 schema 各说各话正是这么来的。
+    """
+    calibrated_at: str = ""
+    """本次标定的日期（``YYYY-MM-DD``）。空 = 还没回填。"""
     width: int = 4024
     height: int = 3036
     fps: float = 20.0

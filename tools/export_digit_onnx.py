@@ -71,6 +71,11 @@ def main(argv=None) -> int:
         torch.onnx.export(
             model, dummy, str(out),
             input_names=["images"], output_names=["logits"],
+            # **batch 维必须是动态的**。导出成固定 [1,3,64,64] 的话，同一帧里
+            # 认出两块装甲板时 `OnnxDigitBackend.infer` 会把裁图堆成 NCHW 送进去，
+            # ORT 直接 INVALID_ARGUMENT；`DigitClassifier` 捕到异常就把整批留在
+            # unknown——两块装甲的数字同时丢失，而且不报错。
+            dynamic_axes={"images": {0: "batch"}, "logits": {0: "batch"}},
             opset_version=17, do_constant_folding=True,
             # torch 2.10 默认走 dynamo 导出器，需要 onnxscript；这里用 TorchScript
             # 导出器，只依赖 onnx 包（本机已装 1.18，与 numpy 1.26 兼容）。
@@ -83,14 +88,32 @@ def main(argv=None) -> int:
         }, ensure_ascii=False))
         return 2
 
+    dynamic_batch = _check_dynamic_batch(out)
     print(json.dumps({
         "out": str(out),
         "size_mb": round(out.stat().st_size / 1024 / 1024, 2),
         "num_classes": args.num_classes,
         "img_size": args.img_size,
+        "dynamic_batch": dynamic_batch,
         "torch": torch.__version__,
     }, ensure_ascii=False))
-    return 0
+    return 0 if dynamic_batch else 1
+
+
+def _check_dynamic_batch(path: Path) -> bool:
+    """导出后当场验一遍输入第 0 维是不是符号维。
+
+    不验这一步就会重演「导出成功、两块装甲全 unknown」：图是合法的，
+    只是 batch 被钉死成 1。
+    """
+    try:
+        import onnx
+
+        graph = onnx.load(str(path))
+        dims = graph.graph.input[0].type.tensor_type.shape.dim
+        return bool(dims[0].dim_param) and not dims[0].dim_value
+    except Exception:  # noqa: BLE001 - 校验失败按不支持处理，别让导出假装成功
+        return False
 
 
 if __name__ == "__main__":

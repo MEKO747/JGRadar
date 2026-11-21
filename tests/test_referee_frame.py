@@ -84,5 +84,16 @@ def test_writer_stops_after_a_transport_error():
 def test_writer_is_callable_as_the_sender_callback():
     written: list[bytes] = []
     writer = RadarPositionWriter(write=written.append)
-    writer(PAYLOAD)   # RobotPositionSender 直接把它当 send 回调
+    assert writer(PAYLOAD) is True, "写成功必须回报 True，否则发送端会把成功记成失败"
     assert len(written) == 1
+
+
+def test_writer_callback_reports_failure_instead_of_silently_swallowing_it():
+    """故障注入：串口写失败时回调必须返回 False，发送端据此不计 frames_sent。"""
+    def boom(_frame: bytes) -> None:
+        raise OSError("device unplugged")
+
+    writer = RadarPositionWriter(write=boom)
+    assert writer(PAYLOAD) is False
+    assert writer.frames_written == 0
+    assert writer.failed is True

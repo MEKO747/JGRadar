@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import struct
 
 import pytest
@@ -21,6 +22,7 @@ from jg_radar.integration.referee_tx import (
     DEFAULT_RATE_HZ,
     ENEMY_OFFSETS,
     MAX_RATE_HZ,
+    MAX_FRAMES_PER_WINDOW,
     OWN_OFFSETS,
     PAYLOAD_LEN,
     RADAR_ROLES,
@@ -79,7 +81,12 @@ def collect_sender(**kwargs):
     def clock() -> float:
         return now["t"]
 
-    sender = RobotPositionSender(sent.append, clock=clock, **kwargs)
+    def send(payload: bytes) -> bool:
+        """假串口：记下来并**明确回报写成功**（发送端只认 True）。"""
+        sent.append(payload)
+        return True
+
+    sender = RobotPositionSender(send, clock=clock, **kwargs)
     return sender, sent, now
 
 
@@ -303,3 +310,117 @@ def test_window_peak_is_reported_for_field_checks():
     assert 4 <= peak <= 5, f"1 秒窗口峰值 {peak} 帧，按 4.7Hz 应该在 4~5"
     assert peak <= MAX_RATE_HZ, "任何 1 秒窗口都不能超过 5 帧"
     assert sender.snapshot()["max_frames_1s"] == peak
+
+
+# ---------------------------------------------------------------------------
+# 故障注入：写失败必须被看见，不能算成「发送」
+# ---------------------------------------------------------------------------
+def test_write_failure_is_never_counted_as_sent():
+    """串口抛异常：组帧照样进行，但 frames_sent 必须是 0。"""
+    now = {"t": 0.0}
+
+    def broken(_payload: bytes) -> bool:
+        raise OSError("device unplugged")
+
+    sender = RobotPositionSender(broken, rate_hz=4.8, clock=lambda: now["t"])
+    rig = Rig()
+    for step in range(20):
+        now["t"] = step * 0.05
+        sender.update(rig.frame(now["t"]))
+        assert sender.tick() in (True, False)
+    assert sender.stats.frames_composed > 0
+    assert sender.stats.frames_sent == 0
+    assert sender.stats.frames_failed == sender.stats.frames_composed
+    assert sender.last_write_ok is False
+    assert "device unplugged" in (sender.last_write_error or "")
+    assert sender.stats.effective_rate_hz(now["t"]) == 0.0
+
+
+def test_a_send_callback_that_returns_nothing_is_not_evidence():
+    """返回 None = 没回报，不是成功。旧代码正是在这里把失败当成发送。"""
+    now = {"t": 0.0}
+    sender = RobotPositionSender(lambda _payload: None, rate_hz=4.8,
+                                 clock=lambda: now["t"])
+    rig = Rig()
+    for step in range(10):
+        now["t"] = step * 0.05
+        sender.update(rig.frame(now["t"]))
+        sender.tick()
+    assert sender.stats.frames_composed > 0
+    assert sender.stats.frames_sent == 0
+    assert "没有返回成功标记" in (sender.last_write_error or "")
+
+
+def test_one_second_window_is_a_hard_gate_not_just_a_statistic():
+    """故障注入：主循环晚到一拍后紧接着又来一拍，两帧只隔几十毫秒。
+
+    旧节拍器只排程不拦截，这种挤兑能在 1 秒里塞进 6 帧（用户复现的那条）。
+    现在发之前查窗口，满 5 帧就丢这一拍。
+    """
+    # 4.7Hz：due 0.8512 时主循环在 1.05 才醒（晚了 0.199 < 一个周期），
+    # 于是 1.08 那一拍几乎贴着发（两帧只隔 30ms）——典型的挤兑。
+    # 旧节拍器在这个序列里 1.05~1.93 的 0.88 秒内会发 6 帧。
+    ticks = [0.0, 0.22, 0.43, 0.64, 1.05, 1.08, 1.29, 1.50, 1.72, 1.93, 2.14]
+    sent_times = []
+    now = {"t": 0.0}
+
+    def send(_payload: bytes) -> bool:
+        sent_times.append(now["t"])
+        return True
+
+    sender = RobotPositionSender(send, rate_hz=4.7, clock=lambda: now["t"])
+    rig = Rig()
+    for stamp in ticks:
+        now["t"] = stamp
+        sender.update(rig.frame(stamp))
+        sender.tick()
+
+    assert sender.stats.max_frames_in_window <= MAX_FRAMES_PER_WINDOW, sent_times
+    assert sender.stats.throttled >= 1, "挤兑时应当有被硬闸门挡掉的拍"
+    # 用验收器同款算法复核一遍：任意 1 秒窗口不超过 5 帧
+    for index, start in enumerate(sent_times):
+        inside = sum(1 for t in sent_times[index:] if t - start < 1.0)
+        assert inside <= MAX_FRAMES_PER_WINDOW, f"从 {start}s 起 1 秒内有 {inside} 帧"
+
+
+# 现场对账的日志行：必须自带「写成功了没有」，否则验收器只能看到组帧时间戳
+def test_referee_log_line_carries_write_ok_and_the_unobservable_third_state(tmp_path):
+    from tools.run_radio_vision import _log_referee_frame
+
+    sender, _sent, now = collect_sender(rate_hz=4.8)
+    rig = Rig()
+    now["t"] = 0.0
+    sender.update(rig.frame(0.0))
+    assert sender.tick() is True
+
+    log = tmp_path / "referee.jsonl"
+    with log.open("w", encoding="utf-8") as handle:
+        _log_referee_frame(handle, sender, writer=object())   # 有串口
+        _log_referee_frame(handle, sender, writer=None)       # 干跑
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert rows[0]["write_ok"] is True
+    assert rows[0]["write_mode"] == "serial"
+    assert rows[1]["write_mode"] == "dry_run"
+    # 第三态「裁判服务器收到」本地观测不到，必须显式写 None 而不是假装有数
+    assert all(row["delivered"] is None for row in rows)
+
+
+def test_referee_log_line_records_the_failure_reason(tmp_path):
+    from tools.run_radio_vision import _log_referee_frame
+
+    now = {"t": 0.0}
+
+    def broken(_payload: bytes) -> bool:
+        raise OSError("device unplugged")
+
+    sender = RobotPositionSender(broken, rate_hz=4.8, clock=lambda: now["t"])
+    rig = Rig()
+    sender.update(rig.frame(0.0))
+    sender.tick()
+
+    log = tmp_path / "dead.jsonl"
+    with log.open("w", encoding="utf-8") as handle:
+        _log_referee_frame(handle, sender, writer=object())
+    row = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
+    assert row["write_ok"] is False
+    assert "device unplugged" in row["write_error"]

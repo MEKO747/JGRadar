@@ -85,8 +85,10 @@ def _build_referee_tx(args):
     else:
         counted = {"frames": 0}
 
-        def send(payload: bytes) -> None:  # 干跑：只数帧，不碰设备
+        def send(payload: bytes) -> bool:  # 干跑：只数帧，不碰设备
+            """没有串口就不要假装发出去了——返回 False，日志里 write_ok 恒假。"""
             counted["frames"] += 1
+            return False
 
     sender = RobotPositionSender(
         send,
@@ -102,8 +104,12 @@ def _build_referee_tx(args):
     return sender, writer
 
 
-def _log_referee_frame(handle, referee) -> None:
-    """把发出的一帧 0x0305 记成一行 JSON，供对账和论文统计。"""
+def _log_referee_frame(handle, referee, writer) -> None:
+    """把发出的一帧 0x0305 记成一行 JSON，供对账和论文统计。
+
+    **必须带 ``write_ok``**：只有组帧时间戳的日志，等于让「没接串口」也能
+    通过 uplink 验收。验收器只认 ``write_ok: true`` 的行。
+    """
     if handle is None:
         return
     from jg_radar.integration.referee_tx import parse_radar_payload
@@ -112,6 +118,13 @@ def _log_referee_frame(handle, referee) -> None:
     record = {
         "t": round(time.monotonic(), 3),
         "own_team": referee.own_team,
+        "write_ok": bool(referee.last_write_ok),
+        "write_error": referee.last_write_error,
+        "write_mode": "serial" if writer is not None else "dry_run",
+        # 第三态：裁判服务器到底收没收到，本地**观测不到**。写 None 是为了让
+        # 后来人一眼看出这里没数，而不是把 write_ok 当成「服务器收到了」。
+        "delivered": None,
+        "seq": referee.stats.frames_composed - 1,
         "slots": {
             name: list(point)
             for name, point in parse_radar_payload(payload, own_team=referee.own_team).items()
@@ -210,7 +223,7 @@ def main(argv=None):
             if referee is not None:
                 referee.update(out)
                 if referee.tick():
-                    _log_referee_frame(referee_log, referee)
+                    _log_referee_frame(referee_log, referee, referee_writer)
             frames += 1
             now = time.monotonic()
             if now - last_report >= 2.0:

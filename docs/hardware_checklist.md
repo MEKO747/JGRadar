@@ -101,8 +101,11 @@ zsh -c 'source ~/.jg_env.zsh; source /opt/ros/jazzy/setup.zsh; \
 
 **通过判据**（从收尾的 `referee_tx_final` 读）：
 
+- `frames_sent > 0` 且 `frames_failed == 0`——**只认串口写成功的帧**；`frames_composed`
+  明显大于 `frames_sent` 就说明有帧只组了没发出去
 - `effective_rate_hz ≥ 4.7`
-- `max_frames_1s ≤ 5`（协议上限 5Hz）
+- `max_frames_1s ≤ 5`（协议上限 5Hz）；`throttled > 0` 说明触发了硬闸门，属正常保护
+- `out/referee_live.jsonl` 每行都有 `write_ok: true`（缺字段 = 证据不足，验收会判 fail）
 - 无连续 0.5 秒断流（看 `referee_tx_final` 与 `referee_live.jsonl` 相邻 `t` 的差 ≤0.5s）
 - 串口侧抓包核对 48 字节布局：对方重装 0–3、对方 3/4 号 8–15、对方哨兵 20–23、己方 24–27 /
   32–39 / 44–47，保留位全 0
@@ -194,6 +197,16 @@ zsh -c 'source ~/.jg_env.zsh; python3 tools/stage3_accept.py \
 
 真值文件格式（`--truth`）：CSV，列 `t0,t1,slot,x_cm,y_cm`，表示某车在 `[t0,t1)` 内的真值位置。
 `--switch-event slot=秒` 是操作手制造换源刺激（拔网线/遮挡）的时刻，没有它换源延迟量不出来。
+
+**判据里的硬约束**（工具写死，改动要有人拍板）：
+
+- 定位准确率：`d<0.8m ≥90%`，且**有效上报 ≥30 个**、**每个真值段至少 1 个采样点**；
+  不满足判 `blocked`。真值窗口里只报一个点就 100%，不算数。
+- 上报节拍：只统计 `write_ok: true` 的帧。日志缺 `write_ok` 字段直接判 **fail**——
+  只有组帧时间戳证明不了写进串口。串口全失败时组帧数再漂亮也是 0 帧发送。
+- 标定：读的必须是**运行时也接受**的字段——`camera.name`、`camera.serial`、
+  `camera.calibrated_at`、`transform.reproj_rms_px`（上限 `transform.reproj_rms_max_px`）。
+  工具会先用 `RadarConfig.from_dict` 验一遍配置，运行时拒绝的 YAML 一律判 `fail`。
 
 `--operator 你的名字`：报告 §1 要写操作者。不给就退到 `git config user.name`（可能只是仓库主人，
 不等于现场操作者），两者都拿不到写成 `unset` 并进 `caveats`——**空串比 `unset` 更糟，它看着像填了**。

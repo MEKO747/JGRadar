@@ -17,6 +17,7 @@ from tools.stage3_accept import (
     FAIL,
     PASS,
     build_report,
+    check_radio_accuracy,
     check_radio_uplink,
     check_vision_calibration,
     empty_flag_values,
@@ -26,9 +27,19 @@ from tools.stage3_accept import (
 )
 
 
-def write_radio(path, times, slot="B1", position=(500, 700)):
-    path.write_text("\n".join(json.dumps({"t": t, "slots": {slot: list(position)}})
+def write_radio(path, times, slot="B1", position=(500, 700), *, write_ok=True):
+    path.write_text("\n".join(json.dumps({"t": t, "write_ok": write_ok,
+                                          "slots": {slot: list(position)}})
                               for t in times) + "\n", encoding="utf-8")
+    return path
+
+
+def write_calibrated_camera(path, *, rms=0.62, serial="DA1234567", date="2026-12-01",
+                            name="MV-CS060-10GC"):
+    path.write_text(f"camera:\n  name: {name}\n  serial: '{serial}'\n"
+                    f"  calibrated_at: '{date}'\n"
+                    f"transform:\n  reproj_rms_px: {rms}\n  reproj_rms_max_px: 3.0\n",
+                    encoding="utf-8")
     return path
 
 
@@ -86,18 +97,17 @@ def test_uplink_metrics_and_failures(tmp_path):
 
 def test_calibration_requires_all_four_items(tmp_path):
     partial = tmp_path / "camera.yaml"
-    partial.write_text("camera:\n  name: MV-CS060-10GC\n  reproj_rms_px: 0.5\n", encoding="utf-8")
+    partial.write_text("camera:\n  name: MV-CS060-10GC\n"
+                       "transform:\n  reproj_rms_px: 0.5\n", encoding="utf-8")
     result = check_vision_calibration(partial)
     assert result["status"] == BLOCKED
-    assert "calibration.serial" in result["reason"] or "serial" in result["reason"]
+    assert "serial" in result["reason"]
 
-    full = tmp_path / "full.yaml"
-    full.write_text("camera:\n  name: MV-CS060-10GC\n  reproj_rms_px: 0.62\n"
-                    "  reproj_rms_max_px: 3.0\n"
-                    "calibration:\n  serial: 'DA1'\n  date: '2026-12-01'\n", encoding="utf-8")
+    full = write_calibrated_camera(tmp_path / "full.yaml")
     result = check_vision_calibration(full)
     assert result["status"] == PASS
     assert len(result["value"]["sha256"]) == 64
+    assert result["value"]["serial"] == "DA1234567"
 
 
 def test_pass_without_artifacts_is_downgraded_to_fail(tmp_path, monkeypatch):
@@ -153,10 +163,7 @@ def test_verdict_aggregation(tmp_path, times_ok):
 # ---------------------------------------------------------------------------
 def test_calibration_fail_when_rms_over_limit(tmp_path):
     """四项齐全但实测 rms 超限 → fail（既不是 blocked，更不是 pass）。"""
-    camera = tmp_path / "over.yaml"
-    camera.write_text("camera:\n  name: MV-CS060-10GC\n  reproj_rms_px: 5.2\n"
-                      "  reproj_rms_max_px: 3.0\n"
-                      "calibration:\n  serial: 'DA1'\n  date: '2026-12-01'\n", encoding="utf-8")
+    camera = write_calibrated_camera(tmp_path / "over.yaml", rms=5.2)
     result = check_vision_calibration(camera)
     assert result["status"] == FAIL
     assert "reproj_rms_px" in result["reason"]
@@ -164,12 +171,25 @@ def test_calibration_fail_when_rms_over_limit(tmp_path):
     assert result["value"]["limit_px"] == 3.0
 
 
-def test_calibration_pass_is_caveated_as_config_only(tmp_path):
-    """配置合格 ≠ 标定在真机上做过，这句必须出现在 caveats 里。"""
-    camera = tmp_path / "full.yaml"
+def test_calibration_rejects_a_yaml_the_runtime_would_refuse(tmp_path):
+    """故障注入：验收器编一套 `calibration:` 节点，主程序加载会直接报错。
+
+    这正是 `d06776c` 的真 bug——验收 pass、运行时 `ConfigError`。验收器必须
+    先过运行时 schema，任何运行时拒绝的文件都不能判 pass。
+    """
+    camera = tmp_path / "phantom.yaml"
     camera.write_text("camera:\n  name: MV-CS060-10GC\n  reproj_rms_px: 0.62\n"
                       "  reproj_rms_max_px: 3.0\n"
                       "calibration:\n  serial: 'DA1'\n  date: '2026-12-01'\n", encoding="utf-8")
+    result = check_vision_calibration(camera)
+    assert result["status"] == FAIL
+    assert "运行时加载不了" in result["reason"]
+    assert "calibration" in result["reason"]
+
+
+def test_calibration_pass_is_caveated_as_config_only(tmp_path):
+    """配置合格 ≠ 标定在真机上做过，这句必须出现在 caveats 里。"""
+    camera = write_calibrated_camera(tmp_path / "full.yaml")
     report = build_report(radio_log=None, truth=None, fusion_log=None, switch_event=None,
                           camera=camera, evidence_grade="B", devices=[], commands=[])
     calibration = next(item for item in report["checks"] if item["id"] == "vision_calibration")
@@ -219,3 +239,74 @@ def test_operator_unset_is_flagged_in_caveats(monkeypatch):
     assert report["operator"] == "unset"
     assert report["operator_source"] == "unset"
     assert any("operator 未填" in text for text in report["caveats"])
+
+
+# ---------------------------------------------------------------------------
+# 故障注入：链路坏掉时验收器必须判错，而不是判过
+# ---------------------------------------------------------------------------
+def test_uplink_rejects_a_log_that_never_wrote(tmp_path):
+    """串口全失败：组帧 48 次、写成功 0 次——旧版会判 pass。"""
+    log = write_radio(tmp_path / "dead.jsonl", [100 + index / 4.7 for index in range(48)],
+                      write_ok=False)
+    result = check_radio_uplink(log)
+    assert result["status"] == FAIL
+    assert result["value"]["frames_composed"] == 48
+    assert result["value"]["frames_written"] == 0
+    assert "写成功 0 次" in result["reason"]
+
+
+def test_uplink_fails_when_the_log_has_no_write_ok_field(tmp_path):
+    """旧格式日志只有时间戳：证明不了写进串口，缺证据按 fail。"""
+    log = tmp_path / "old.jsonl"
+    log.write_text("\n".join(json.dumps({"t": 100 + index / 4.7}) for index in range(48)) + "\n",
+                   encoding="utf-8")
+    result = check_radio_uplink(log)
+    assert result["status"] == FAIL
+    assert "write_ok" in result["reason"]
+
+
+def test_uplink_only_counts_frames_that_were_really_written(tmp_path):
+    """一半写失败：频率要按写成功的那些算，不能拿组帧数充数。"""
+    times = [100 + index / 4.7 for index in range(48)]
+    log = tmp_path / "half.jsonl"
+    rows = [json.dumps({"t": t, "write_ok": index < 24, "slots": {"B1": [500, 700]}})
+            for index, t in enumerate(times)]
+    log.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    result = check_radio_uplink(log)
+    assert result["value"]["frames_composed"] == 48
+    assert result["value"]["frames_written"] == 24
+    # 频率按 24 个写成功的帧算（4.69Hz），拿 48 个组帧数充数就会显示 4.7+
+    assert result["status"] == FAIL
+    assert "频率" in result["reason"]
+
+
+def test_accuracy_blocks_on_too_few_samples(tmp_path):
+    """1 个样本 100% 也不算数：样本不足时百分比没有意义。"""
+    log = write_radio(tmp_path / "one.jsonl", [100.0])
+    truth = [{"t0": 0.0, "t1": 400.0, "slot": "B1", "x_cm": 500.0, "y_cm": 700.0}]
+    result = check_radio_accuracy(log, truth)
+    assert result["status"] == BLOCKED
+    assert "少于" in result["reason"]
+
+
+def test_accuracy_blocks_when_a_truth_segment_has_no_sample(tmp_path):
+    """覆盖率：每个真值段至少一个采样点，缺一段就 blocked。"""
+    times = [100 + index / 4.7 for index in range(48)]
+    log = write_radio(tmp_path / "enough.jsonl", times)
+    truth = [{"t0": 0.0, "t1": 400.0, "slot": "B1", "x_cm": 500.0, "y_cm": 700.0}]
+    assert check_radio_accuracy(log, truth)["status"] == PASS
+
+    truth.append({"t0": 500.0, "t1": 600.0, "slot": "B1", "x_cm": 500.0, "y_cm": 700.0})
+    result = check_radio_accuracy(log, truth)
+    assert result["status"] == BLOCKED
+    assert "真值段" in result["reason"]
+
+
+def test_accuracy_ignores_frames_that_never_wrote(tmp_path):
+    """没写出去的上报不能算进分母，也不能凑样本数。"""
+    log = write_radio(tmp_path / "dead.jsonl", [100 + index / 4.7 for index in range(48)],
+                      write_ok=False)
+    truth = [{"t0": 0.0, "t1": 400.0, "slot": "B1", "x_cm": 500.0, "y_cm": 700.0}]
+    result = check_radio_accuracy(log, truth)
+    assert result["status"] == BLOCKED
+    assert result["value"]["samples"] == 0
