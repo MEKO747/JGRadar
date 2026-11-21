@@ -10,7 +10,9 @@
    **绝不许 `pass`**。`blocked` 必须带 `reason`。
 2. **等级**：报告顶层 `evidence_grade ∈ {A,B,C,D}`，取所有已判定项里**最低**的那一级。
    没有真设备时上限是 **C**（合成输入）或 **D**（未跑）；`A` 只在「设备在位 + 真实信号 + 真值齐全」时出现。
-3. **可回溯**：`pass` 必须同时给出 `value`、`threshold`、`artifacts[]`（路径 + sha256）与 `grade`。
+3. **故障注入**：每项判据必须有「弄坏它」的用例，且工具在坏输入下判 `fail`（不是 `blocked`、更不是 `pass`）。
+   过不了故障注入的验收器不算验收器。至少要覆盖：串口写失败、同帧 ≥2 块装甲、`camera.yaml` 主程序加载失败、主循环卡顿 0.2s。
+4. **可回溯**：`pass` 必须同时给出 `value`、`threshold`、`artifacts[]`（路径 + sha256）与 `grade`。
    缺任何一个，该项按 `fail` 处理（不是 `blocked`，因为「拿不出证据」本身就是不通过）。
 
 ## 1. 顶层结构
@@ -38,9 +40,9 @@
 
 | `checks[].id` | `criterion`（写进报告原文） | `threshold` | 需要的证据 |
 |---|---|---|---|
-| `radio_accuracy` | `0x0A01` 逐次判定 `d<0.8m` 比例 | `>= 0.90` | 上报序列 + 真值轨迹 + 分母（有效上报次数） |
-| `radio_uplink` | `0x0305` 实发频率与断流 | `>= 4.7 Hz`、任意 1s 窗口 `<= 5 帧`、无 `gap > 0.5s` | 发送日志（时间戳）+ provider/端口信息 |
-| `vision_calibration` | 标定四要件齐全 | 序列号 + 重标日期 + `reproj_rms_px` 实测 + 文件 sha256 | 标定文件 + 棋盘图 + 相机序列号 |
+| `radio_accuracy` | `0x0A01` 逐次判定 `d<0.8m` 比例 | `>= 0.90`；**样本 ≥30**；**每个真值段 ≥1 个采样点**，否则 `blocked` | 上报序列 + 真值轨迹 + 分母（有效上报次数） |
+| `radio_uplink` | `0x0305` 实发频率与断流 | `>= 4.7 Hz`、任意 1s 窗口 `<= 5 帧`、无 `gap > 0.5s` | 发送日志（时间戳 + **每行 `write_ok`**）+ provider/端口信息；**缺 `write_ok` 按 fail** |
+| `vision_calibration` | 标定四要件齐全且主程序可加载 | 序列号 + 重标日期 + `reproj_rms_px` 实测 + 文件 sha256；**`load_config` 必须接受同一份 YAML** | 标定文件 + 棋盘图 + 相机序列号 + 加载成功的输出 |
 | `fusion_switch` | 换源时间与跳变 | `<= 0.4 s`、跳变 `<= 150 cm` | 融合输出（含 `source`/`observed_at`）+ 真值 |
 
 每项固定字段：
@@ -57,6 +59,23 @@
   "note": "合成输入只能跑通逻辑，不能判 pass"
 }
 ```
+
+### 2.1 三项新增自证字段（2026-11-21 故障注入复盘后）
+
+| 判据 | 必须出现在 `checks[].value` 里的字段 | 判据 |
+|---|---|---|
+| `radio_uplink` | `frames_sent`、`frames_written`、`write_ok_ratio` | 三者一致（`frames_sent == frames_written`、ratio 为 1）；日志行缺 `write_ok` 按 `fail` |
+| `vision_calibration` | `config_loads: true`、`config_load_error`（为空） | 用运行时同一个 `load_config` 加载同一份 YAML 成功；否则 `fail` |
+| `radio_accuracy` | `samples`、`truthed_segments`、`segments_covered` | `samples >= 30` 且 `segments_covered == truthed_segments`；不满足 `blocked` |
+
+**标定序列号与日期放哪**：运行时 schema 拒绝 `calibration:` 节点，所以不要往 YAML 里塞。
+改为 YAML 同目录的旁证文件 `<camera.yaml 文件名>.provenance.json`：
+
+```json
+{ "camera_model": "MV-CS060-10GC", "serial": "DA1234567", "calibrated_at": "2026-12-01", "operator": "..." }
+```
+
+验收器读旁证文件 + 主 YAML 能否被 `load_config` 加载，两者都过才算 `pass`；旁证文件必须进 `artifacts[]`（带 sha256）。
 
 ## 3. 八节映射（模板 → 报告字段）
 
