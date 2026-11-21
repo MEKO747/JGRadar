@@ -72,6 +72,13 @@
 `CameraConfig` 的两个可选字段（默认空串），验收器与运行时**读同一份 schema**，不再用旁证文件，
 也不再往 YAML 里塞 `calibration:` 节点（运行时会拒绝，`d06776c` 的验收器就是这么假通过的）。
 
+**`calibrated_at` 必须写成带引号的字符串**：`calibrated_at: '2026-12-01'`。
+不加引号会被 YAML 解析成 `date` 对象，运行时 schema 报「期望字符串」——已实测：
+未加引号 → `fail`（`config.camera.calibrated_at: 期望字符串`）、加引号 → `pass`。
+
+**`write_ok_ratio` 现为 1 才 `pass`**：偶发一次写失败即判 `fail`。这是有意的严格口径——
+现场串口噪声大要放宽的话，**先改本文件、再改工具**，不许在实现里悄悄松。
+
 **`--referee-log` 行格式必须自证**：每行至少包含 `t`、`slot`、`write_ok`（bool）、`write_error`、
 `write_mode`；`delivered` 固定写 `null` 并注明「本地观测不到，不代表裁判系统收到」。
 **缺 `write_ok` 的行按 `fail`**——验收器不能把「没写成功」当成「没这个字段所以不管」。
