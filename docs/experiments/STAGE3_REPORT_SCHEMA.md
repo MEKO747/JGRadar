@@ -64,7 +64,7 @@
 
 | 判据 | 必须出现在 `checks[].value` 里的字段 | 判据 |
 |---|---|---|
-| `radio_uplink` | `frames_sent`、`frames_written`、`write_ok_ratio` | 三者一致（`frames_sent == frames_written`、ratio 为 1）；日志行缺 `write_ok` 按 `fail` |
+| `radio_uplink` | `frames_composed`（分母）、`frames_written`（写成功）、`write_ok_ratio` | **`write_ok_ratio = frames_written / frames_composed`，必须为 1**；日志行缺 `write_ok` 按 `fail` |
 | `vision_calibration` | `config_loads: true`、`config_load_error`（为空） | 用运行时同一个 `load_config` 加载同一份 YAML 成功；否则 `fail` |
 | `radio_accuracy` | `samples`、`truthed_segments`、`segments_covered` | `samples >= 30` 且 `segments_covered == truthed_segments`；不满足 `blocked` |
 
@@ -76,7 +76,10 @@
 不加引号会被 YAML 解析成 `date` 对象，运行时 schema 报「期望字符串」——已实测：
 未加引号 → `fail`（`config.camera.calibrated_at: 期望字符串`）、加引号 → `pass`。
 
-**`write_ok_ratio` 现为 1 才 `pass`**：偶发一次写失败即判 `fail`。这是有意的严格口径——
+**`write_ok_ratio` 的分母必须是「组帧数」**：`frames_written / frames_composed`。
+若把 `frames_sent` 定义成「写成功数」再与 `frames_written` 比，`sent == written` 恒真，
+门就白设了——这正是原来 `frames_sent += 1` 那个 bug 的形状。`frames_sent` 可保留作同义字段，
+但**判定只用 ratio**，且 ratio 必须为 1；偶发一次写失败即判 `fail`。这是有意的严格口径——
 现场串口噪声大要放宽的话，**先改本文件、再改工具**，不许在实现里悄悄松。
 
 **`--referee-log` 行格式必须自证**：每行至少包含 `t`、`slot`、`write_ok`（bool）、`write_error`、
