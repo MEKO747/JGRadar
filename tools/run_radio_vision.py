@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
+from datetime import datetime
 import json
 import math
 from pathlib import Path
+import os
 import signal
 import sys
 import threading
@@ -53,6 +55,9 @@ def parse_args(argv=None):
                         help="坐标年龄超过多少秒算过期")
     parser.add_argument("--referee-log", default="",
                         help="把每帧 0x0305 的内容按 JSONL 落盘，供对账与论文统计")
+    parser.add_argument("--referee-session", default="",
+                        help="本次运行的会话标识；缺省按启动时间+pid 生成。"
+                             "日志是 append 的，验收器只认同一 session 的行")
     args = parser.parse_args(argv)
     if not math.isfinite(args.seconds) or args.seconds < 0:
         parser.error("--seconds must be finite and nonnegative")
@@ -132,7 +137,7 @@ def _open_referee_link(args, bridge):
     return link
 
 
-def _log_referee_frame(handle, referee, writer) -> None:
+def _log_referee_frame(handle, referee, writer, session_id: str = "") -> None:
     """把发出的一帧 0x0305 记成一行 JSON，供对账和论文统计。
 
     **必须带 ``write_ok``**：只有组帧时间戳的日志，等于让「没接串口」也能
@@ -144,6 +149,9 @@ def _log_referee_frame(handle, referee, writer) -> None:
 
     payload = referee.last_payload
     record = {
+        # 会话标识：日志是 append 的，两次跑接在同一个文件里时，
+        # 只有这个字段能把「上一次的 33 行」和「这一次的 33 行」分开。
+        "session_id": session_id,
         "t": round(time.monotonic(), 3),
         "own_team": referee.own_team,
         "write_ok": bool(referee.last_write_ok),
@@ -229,6 +237,8 @@ def main(argv=None):
     referee_log = None
     iterator = None
     started = time.monotonic()
+    referee_session = args.referee_session or (
+        f"{datetime.now().astimezone():%Y%m%d_%H%M%S}_{os.getpid()}")
     frames = 0
     last_report = started
     try:
@@ -274,7 +284,7 @@ def main(argv=None):
             if referee is not None:
                 referee.update(out)
                 if referee.tick():
-                    _log_referee_frame(referee_log, referee, referee_writer)
+                    _log_referee_frame(referee_log, referee, referee_writer, referee_session)
             frames += 1
             now = time.monotonic()
             if now - last_report >= 2.0:
@@ -308,7 +318,8 @@ def main(argv=None):
             print(json.dumps({"referee_serial_final": referee_link.snapshot()},
                              ensure_ascii=False), flush=True)
         if referee is not None:
-            print(json.dumps({"referee_tx_final": referee.snapshot()}, ensure_ascii=False),
+            print(json.dumps({"referee_tx_final": referee.snapshot(),
+                              "referee_session": referee_session}, ensure_ascii=False),
                   flush=True)
         for sig, handler in previous_signals.items():
             signal.signal(sig, handler)

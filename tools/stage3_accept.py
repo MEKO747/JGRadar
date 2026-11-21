@@ -98,7 +98,8 @@ def interpreter_hint() -> str:
 
 
 def reproduce_command(*, radio_log="", truth="", fusion_log="", switch_event="",
-                      camera="", out="", evidence_grade="", operator="") -> str:
+                      camera="", out="", evidence_grade="", operator="",
+                      session="") -> str:
     """只拼实际生效的参数：空值与默认值一律省略。
 
     旧版把空 flag 也拼进去（``--radio-log  --truth  ...``），现场照抄当场报错；
@@ -111,7 +112,8 @@ def reproduce_command(*, radio_log="", truth="", fusion_log="", switch_event="",
     for flag, value in (("--radio-log", radio_log), ("--truth", truth),
                         ("--fusion-log", fusion_log), ("--switch-event", switch_event),
                         ("--camera", camera), ("--out", out),
-                        ("--evidence-grade", evidence_grade), ("--operator", operator)):
+                        ("--evidence-grade", evidence_grade), ("--operator", operator),
+                        ("--session", session)):
         text = str(value or "").strip()
         if not text or text == defaults.get(flag):
             continue
@@ -180,7 +182,36 @@ def _missing_write_ok(rows: list[dict]) -> int:
     return sum(1 for row in rows if "write_ok" not in row)
 
 
-def check_radio_accuracy(radio_log: Path | None, truth: list[dict] | None) -> dict:
+def _select_session(rows: list[dict], session: str | None) -> tuple[list[dict], str | None]:
+    """挑出**同一次运行**的日志行。
+
+    日志是 append 的：两次跑写进同一个文件，帧数会翻倍（33 帧 → 66 行），
+    验收器分不清就开始算错——这不是假设，是现场真踩过的坑。
+    规则：每行必须有 ``session_id``；混了多个 session 时必须用 ``--session``
+    指定，或者分文件，否则判 fail 让人自己理清。
+    """
+    missing = sum(1 for row in rows if not str(row.get("session_id") or "").strip())
+    if missing:
+        return [], (f"{missing}/{len(rows)} 行缺 session_id："
+                    "无法确定这些行属于哪次运行，不能拿来做判据")
+    counts: dict[str, int] = {}
+    for row in rows:
+        key = str(row["session_id"])
+        counts[key] = counts.get(key, 0) + 1
+    if session:
+        selected = [row for row in rows if str(row["session_id"]) == session]
+        if not selected:
+            return [], f"没有 session_id == {session!r} 的行（文件里有 {sorted(counts)}）"
+        return selected, None
+    if len(counts) > 1:
+        detail = "、".join(f"{name}({count} 行)" for name, count in sorted(counts.items()))
+        return [], (f"日志混了 {len(counts)} 个 session：{detail}。"
+                    "append 累加会让帧数翻倍，请分文件或用 --session 指定")
+    return rows, None
+
+
+def check_radio_accuracy(radio_log: Path | None, truth: list[dict] | None, *,
+                         session: str | None = None) -> dict:
     threshold = (f"d<{ACCURATE_M}m 比例 >= {ACCURATE_RATIO_MIN:.0%}，"
                  f"有效上报 >= {ACCURACY_MIN_SAMPLES} 个且每个真值段至少 1 个")
     if radio_log is None or not radio_log.is_file():
@@ -190,7 +221,11 @@ def check_radio_accuracy(radio_log: Path | None, truth: list[dict] | None) -> di
         return {"status": BLOCKED, "reason": "缺少 --truth：没有真值就算不出 d",
                 "value": None, "threshold": threshold, "artifacts": [], "grade": "D"}
 
-    rows = _load_log(radio_log)
+    rows, session_error = _select_session(_load_log(radio_log), session)
+    if session_error:
+        return {"status": FAIL, "reason": session_error,
+                "value": {"session": session}, "threshold": threshold,
+                "artifacts": [], "grade": "B"}
     if _missing_write_ok(rows):
         return {"status": FAIL,
                 "reason": f"{_missing_write_ok(rows)}/{len(rows)} 行日志缺 write_ok："
@@ -246,13 +281,17 @@ def check_radio_accuracy(radio_log: Path | None, truth: list[dict] | None) -> di
 # ---------------------------------------------------------------------------
 # 2) 无线电上报节拍
 # ---------------------------------------------------------------------------
-def check_radio_uplink(radio_log: Path | None) -> dict:
+def check_radio_uplink(radio_log: Path | None, *, session: str | None = None) -> dict:
     threshold = (f">={UPLINK_RATE_MIN_HZ}Hz、窗口<={UPLINK_WINDOW_MAX_FRAMES}、"
                  f"gap<={UPLINK_MAX_GAP_S}s（只认 write_ok:true）")
     if radio_log is None or not radio_log.is_file():
         return {"status": BLOCKED, "reason": "缺少 --radio-log", "value": None,
                 "threshold": threshold, "artifacts": [], "grade": "D"}
-    rows = _load_log(radio_log)
+    rows, session_error = _select_session(_load_log(radio_log), session)
+    if session_error:
+        return {"status": FAIL, "reason": session_error,
+                "value": {"session": session}, "threshold": threshold,
+                "artifacts": [], "grade": "B"}
     if _missing_write_ok(rows):
         return {"status": FAIL,
                 "reason": f"{_missing_write_ok(rows)}/{len(rows)} 行缺 write_ok："
@@ -473,10 +512,10 @@ def build_report(*, radio_log: Path | None, truth: list[dict] | None,
                  fusion_log: Path | None, switch_event: tuple[str, float] | None,
                  camera: Path | None, evidence_grade: str = "B",
                  devices: list[dict] | None = None, commands: list[str] | None = None,
-                 operator: str | None = None) -> dict:
+                 operator: str | None = None, session: str | None = None) -> dict:
     checks = [
-        {"id": "radio_accuracy", **check_radio_accuracy(radio_log, truth)},
-        {"id": "radio_uplink", **check_radio_uplink(radio_log)},
+        {"id": "radio_accuracy", **check_radio_accuracy(radio_log, truth, session=session)},
+        {"id": "radio_uplink", **check_radio_uplink(radio_log, session=session)},
         {"id": "vision_calibration", **check_vision_calibration(camera)},
         {"id": "fusion_switch", **check_fusion_switch(fusion_log, switch_event)},
     ]
@@ -579,11 +618,12 @@ def _synthetic_inputs(tmp: Path, *, bad: bool) -> dict:
     lines = []
     for index in range(60):
         offset_cm = 90 if bad else 20
-        lines.append(json.dumps({"t": base + index * interval,
-                                 "write_ok": True,
+        lines.append(json.dumps({"session_id": "selftest",
+                                 "t": base + index * interval, "write_ok": True,
                                  "slots": {"B1": [500 + offset_cm, 700]}}))
     if bad:
-        tail = [json.dumps({"t": base + 20 * interval + 1.2 + i * interval,
+        tail = [json.dumps({"session_id": "selftest",
+                            "t": base + 20 * interval + 1.2 + i * interval,
                             "write_ok": True,
                             "slots": {"B1": [540, 700]}}) for i in range(10)]
         lines = lines[:20] + tail
@@ -684,6 +724,8 @@ def main(argv=None) -> int:
     parser.add_argument("--out", default=str(ROOT / "out" / "stage3_accept"))
     parser.add_argument("--evidence-grade", choices=("B", "C"), default="B",
                         help="A 级只能由真机现场人工签字，工具不发 A")
+    parser.add_argument("--session", default="",
+                        help="只统计该 referee-log session_id 的行；日志 append 累加时必须指定")
     parser.add_argument("--operator", default="",
                         help="谁跑的这次验收；缺省退到 git config user.name，都拿不到写 unset")
     parser.add_argument("--selftest", action="store_true")
@@ -705,11 +747,12 @@ def main(argv=None) -> int:
         camera=Path(args.camera) if args.camera else None,
         evidence_grade=args.evidence_grade,
         operator=args.operator,
+        session=args.session or None,
         commands=[reproduce_command(radio_log=args.radio_log, truth=args.truth,
                                     fusion_log=args.fusion_log,
                                     switch_event=args.switch_event, camera=args.camera,
                                     out=args.out, evidence_grade=args.evidence_grade,
-                                    operator=args.operator)],
+                                    operator=args.operator, session=args.session)],
     )
 
     out = Path(args.out) / datetime.now().strftime("%Y%m%d_%H%M%S")

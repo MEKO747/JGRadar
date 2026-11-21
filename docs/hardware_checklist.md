@@ -105,7 +105,8 @@ zsh -c 'source ~/.jg_env.zsh; source /opt/ros/jazzy/setup.zsh; \
   明显大于 `frames_sent` 就说明有帧只组了没发出去
 - `effective_rate_hz ≥ 4.7`
 - `max_frames_1s ≤ 5`（协议上限 5Hz）；`throttled > 0` 说明触发了硬闸门，属正常保护
-- `out/referee_live.jsonl` 每行都有 `write_ok: true`（缺字段 = 证据不足，验收会判 fail）
+- `out/referee_live.jsonl` 每行都有 `write_ok: true`，且**同一次运行的行 `session_id` 一致**
+  （日志是 append 的，跨会话混在一起会让帧数翻倍；验收时用 `--session <id>`）
 - 收尾还有 `referee_serial_final`：`marking_frames` / `radar_info_frames` 说明
   `0x020C`/`0x020E` 真的读到了，`write_errors` 为 0。**串口只归 runner 一个进程**，
   接收节点在联合启动下不碰它。
@@ -188,8 +189,11 @@ zsh -c 'source ~/.jg_env.zsh; source /opt/ros/jazzy/setup.zsh; \
 zsh -c 'source ~/.jg_env.zsh; python3 tools/stage3_accept.py \
     --radio-log out/live.jsonl --truth out/points.csv \
     --fusion-log out/fused.jsonl --switch-event B1=12.3 \
-    --out out/stage3_accept'
+    --session 20261121_135308_12345 --out out/stage3_accept'
 ```
+
+`--session` 取自日志里每行的 `session_id`（`run_radio_vision --referee-session` 可显式指定）。
+一个日志文件里混了多次运行又没指定 session，验收器直接判 fail——别让它替我们挑行。
 
 - 四项判据写死在该工具里（`radio_accuracy` / `radio_uplink` / `vision_calibration` / `fusion_switch`），
   与 goal 完全一致；工具不会自己发明门槛。

@@ -27,8 +27,10 @@ from tools.stage3_accept import (
 )
 
 
-def write_radio(path, times, slot="B1", position=(500, 700), *, write_ok=True):
-    path.write_text("\n".join(json.dumps({"t": t, "write_ok": write_ok,
+def write_radio(path, times, slot="B1", position=(500, 700), *, write_ok=True,
+                session="s1"):
+    path.write_text("\n".join(json.dumps({"session_id": session, "t": t,
+                                          "write_ok": write_ok,
                                           "slots": {slot: list(position)}})
                               for t in times) + "\n", encoding="utf-8")
     return path
@@ -122,7 +124,7 @@ def test_pass_without_artifacts_is_downgraded_to_fail(tmp_path, monkeypatch):
 
     fake = {"status": PASS, "reason": "", "value": {"x": 1}, "threshold": "t",
             "artifacts": [], "grade": "B"}
-    monkeypatch.setattr(module, "check_radio_uplink", lambda _log: dict(fake))
+    monkeypatch.setattr(module, "check_radio_uplink", lambda _log, **_kw: dict(fake))
     report = build_report(radio_log=None, truth=None, fusion_log=None, switch_event=None,
                           camera=None, evidence_grade="B", devices=[], commands=[])
     uplink = next(item for item in report["checks"] if item["id"] == "radio_uplink")
@@ -266,8 +268,8 @@ def test_uplink_rejects_a_log_that_never_wrote(tmp_path):
 def test_uplink_fails_when_the_log_has_no_write_ok_field(tmp_path):
     """旧格式日志只有时间戳：证明不了写进串口，缺证据按 fail。"""
     log = tmp_path / "old.jsonl"
-    log.write_text("\n".join(json.dumps({"t": 100 + index / 4.7}) for index in range(48)) + "\n",
-                   encoding="utf-8")
+    log.write_text("\n".join(json.dumps({"session_id": "s1", "t": 100 + index / 4.7})
+                             for index in range(48)) + "\n", encoding="utf-8")
     result = check_radio_uplink(log)
     assert result["status"] == FAIL
     assert "write_ok" in result["reason"]
@@ -277,8 +279,8 @@ def test_uplink_only_counts_frames_that_were_really_written(tmp_path):
     """一半写失败：频率要按写成功的那些算，不能拿组帧数充数。"""
     times = [100 + index / 4.7 for index in range(48)]
     log = tmp_path / "half.jsonl"
-    rows = [json.dumps({"t": t, "write_ok": index < 24, "slots": {"B1": [500, 700]}})
-            for index, t in enumerate(times)]
+    rows = [json.dumps({"session_id": "s1", "t": t, "write_ok": index < 24,
+                        "slots": {"B1": [500, 700]}}) for index, t in enumerate(times)]
     log.write_text("\n".join(rows) + "\n", encoding="utf-8")
     result = check_radio_uplink(log)
     assert result["value"]["frames_composed"] == 48
@@ -318,3 +320,45 @@ def test_accuracy_ignores_frames_that_never_wrote(tmp_path):
     result = check_radio_accuracy(log, truth)
     assert result["status"] == BLOCKED
     assert result["value"]["samples"] == 0
+
+
+# ---------------------------------------------------------------------------
+# session_id：日志是 append 的，两次跑写同一个文件必须能分开
+# ---------------------------------------------------------------------------
+def test_mixed_sessions_are_refused_until_one_is_named(tmp_path):
+    """现场真踩过的坑：33 帧上线路，日志却有 66 行（两次跑接在一起）。"""
+    times = [100 + index / 4.7 for index in range(48)]
+    log = tmp_path / "mixed.jsonl"
+    rows = []
+    for session in ("run_a", "run_b"):
+        rows += [json.dumps({"session_id": session, "t": t, "write_ok": True,
+                             "slots": {"B1": [500, 700]}}) for t in times]
+    log.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    result = check_radio_uplink(log)
+    assert result["status"] == FAIL
+    assert "混了 2 个 session" in result["reason"]
+    assert "run_a" in result["reason"] and "run_b" in result["reason"]
+
+    # 指定 session 后只算那一次：48 帧、约 4.7Hz，正常通过
+    result = check_radio_uplink(log, session="run_a")
+    assert result["status"] == PASS
+    assert result["value"]["frames_composed"] == 48
+    assert result["value"]["frames_sent"] == 48
+
+
+def test_rows_without_session_id_are_fail(tmp_path):
+    log = tmp_path / "nosession.jsonl"
+    log.write_text("\n".join(json.dumps({"t": 100 + index / 4.7, "write_ok": True})
+                             for index in range(48)) + "\n", encoding="utf-8")
+    result = check_radio_uplink(log)
+    assert result["status"] == FAIL
+    assert "session_id" in result["reason"]
+
+
+def test_unknown_session_name_is_fail_not_empty_pass(tmp_path):
+    log = write_radio(tmp_path / "one.jsonl", [100 + index / 4.7 for index in range(48)],
+                      session="run_a")
+    result = check_radio_uplink(log, session="run_z")
+    assert result["status"] == FAIL
+    assert "run_z" in result["reason"]

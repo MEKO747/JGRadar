@@ -142,6 +142,28 @@ bash tools/start_radio_vision.sh red --radio-only --referee-tx --referee-serial 
   这条路径和联合启动互斥。
 - 拔线不崩：写失败返回 `False`（`write_ok: false`），读线程收到异常只报一次警告。
 
+### 离线验收：pty 假串口（C 级证据）
+
+不接 Pluto、不接裁判机也能把「串口单点所有权 + 等级通路 + 拔线」测到底：
+
+```zsh
+zsh -c 'source ~/.jg_env.zsh; source /opt/ros/jazzy/setup.zsh; \
+        source build/radio/install/local_setup.zsh; \
+        python3 tools/referee_pty_check.py --mode e2e'      # 或 --mode unplug
+```
+
+结果落 `out/referee_pty/<时间戳>/result.json`（带 commit、脚本哈希、日志哈希）。
+
+它**能**证明：一个 fd 同时读 `0x020C/0x020E` 与写 `0x0305`、等级 1→3→2 只在变化时发布
+（启动那次是初始发布，不是定时重发）、同一 pty 上 48 字节帧按 CRC 拆得出来、拔线不崩且
+`SerialException` 原文进日志。
+它**不能**证明：空口能收到这两条命令、真串口时序、裁判机真的收到 `0x0305`——那些仍是零样本。
+按证据分级属 **C**（合成帧），不进阶段 3 验收表。
+
+日志按 **session** 分隔：每次运行生成 `session_id` 写进每一行。日志是 append 的，
+两次跑接在同一个文件里会让帧数翻倍（33 帧 → 66 行），所以验收时必须指定
+`tools/stage3_accept.py --session <id>`；混了多个 session 又没指定，验收器直接判 fail。
+
 线格式（`0xA5` 帧头 + CRC8 + CRC16）在 `radio/radar_parse_em_wave/rmuc/referee_frame.py`，
 和接收方向共用同一份 CRC 表。统计字段分三态：`frames_composed`（组帧）、
 `frames_sent`（**串口写成功**）、`frames_failed`（写失败），另有 `throttled`
