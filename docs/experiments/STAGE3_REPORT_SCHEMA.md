@@ -72,6 +72,15 @@
 `CameraConfig` 的两个可选字段（默认空串），验收器与运行时**读同一份 schema**，不再用旁证文件，
 也不再往 YAML 里塞 `calibration:` 节点（运行时会拒绝，`d06776c` 的验收器就是这么假通过的）。
 
+**`--referee-log` 每行必须带 `session_id`**：验收器只认同一个 session 的行；
+混了多个 session 而未指定 `--session` 时判 `fail` 并列出各 session 行数。
+现场 append 一次就会重演「66 行对 33 帧」，这不是可选字段。
+
+**频率口径待定（已暴露冲突）**：`radio_uplink` 现在用 `frames / 墙钟跨度` 判 `>=4.7Hz`，
+而 4.7Hz 标称在 6.8 秒窗口下实测只有 **4.68**（33 帧、t 跨度 6.838 s、`(n-1)/span = 4.68`）。
+**pty e2e 自己的日志都过不了这条判据**。待定方案（需 admin 拍）：改测 `(n-1)/(t_last-t_first)`、
+或阈值放到 `>=4.65`、或要求统计窗口 ≥30 s。定案前该判据不得用于签收。
+
 **`calibrated_at` 必须写成带引号的字符串**：`calibrated_at: '2026-12-01'`。
 不加引号会被 YAML 解析成 `date` 对象，运行时 schema 报「期望字符串」——已实测：
 未加引号 → `fail`（`config.camera.calibrated_at: 期望字符串`）、加引号 → `pass`。
