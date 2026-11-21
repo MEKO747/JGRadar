@@ -42,7 +42,7 @@
 |---|---|---|---|
 | `radio_accuracy` | `0x0A01` 逐次判定 `d<0.8m` 比例 | `>= 0.90`；**样本 ≥30**；**每个真值段 ≥1 个采样点**，否则 `blocked` | 上报序列 + 真值轨迹 + 分母（有效上报次数） |
 | `radio_uplink` | `0x0305` 实发频率与断流 | `>= 4.7 Hz`、任意 1s 窗口 `<= 5 帧`、无 `gap > 0.5s` | 发送日志（时间戳 + **每行 `write_ok`**）+ provider/端口信息；**缺 `write_ok` 按 fail** |
-| `vision_calibration` | 标定四要件齐全且主程序可加载 | 序列号 + 重标日期 + `reproj_rms_px` 实测 + 文件 sha256；**`load_config` 必须接受同一份 YAML** | 标定文件 + 棋盘图 + 相机序列号 + 加载成功的输出 |
+| `vision_calibration` | 标定四要件齐全且主程序可加载 | `camera.name`（型号，非 `unselected`）+ `camera.serial` + `camera.calibrated_at` + `transform.reproj_rms_px` 实测；**`RadarConfig.from_dict` 必须接受同一份 YAML** | 标定文件 + 棋盘图 + 相机序列号 + 加载成功的输出 |
 | `fusion_switch` | 换源时间与跳变 | `<= 0.4 s`、跳变 `<= 150 cm` | 融合输出（含 `source`/`observed_at`）+ 真值 |
 
 每项固定字段：
@@ -68,14 +68,13 @@
 | `vision_calibration` | `config_loads: true`、`config_load_error`（为空） | 用运行时同一个 `load_config` 加载同一份 YAML 成功；否则 `fail` |
 | `radio_accuracy` | `samples`、`truthed_segments`、`segments_covered` | `samples >= 30` 且 `segments_covered == truthed_segments`；不满足 `blocked` |
 
-**标定序列号与日期放哪**：运行时 schema 拒绝 `calibration:` 节点，所以不要往 YAML 里塞。
-改为 YAML 同目录的旁证文件 `<camera.yaml 文件名>.provenance.json`：
+**标定序列号与日期放哪（2026-11-21 定稿）**：`camera.serial`、`camera.calibrated_at` 已加为
+`CameraConfig` 的两个可选字段（默认空串），验收器与运行时**读同一份 schema**，不再用旁证文件，
+也不再往 YAML 里塞 `calibration:` 节点（运行时会拒绝，`d06776c` 的验收器就是这么假通过的）。
 
-```json
-{ "camera_model": "MV-CS060-10GC", "serial": "DA1234567", "calibrated_at": "2026-12-01", "operator": "..." }
-```
-
-验收器读旁证文件 + 主 YAML 能否被 `load_config` 加载，两者都过才算 `pass`；旁证文件必须进 `artifacts[]`（带 sha256）。
+**`--referee-log` 行格式必须自证**：每行至少包含 `t`、`slot`、`write_ok`（bool）、`write_error`、
+`write_mode`；`delivered` 固定写 `null` 并注明「本地观测不到，不代表裁判系统收到」。
+**缺 `write_ok` 的行按 `fail`**——验收器不能把「没写成功」当成「没这个字段所以不管」。
 
 ## 3. 八节映射（模板 → 报告字段）
 
