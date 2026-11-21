@@ -106,6 +106,9 @@ zsh -c 'source ~/.jg_env.zsh; source /opt/ros/jazzy/setup.zsh; \
 - `effective_rate_hz ≥ 4.7`
 - `max_frames_1s ≤ 5`（协议上限 5Hz）；`throttled > 0` 说明触发了硬闸门，属正常保护
 - `out/referee_live.jsonl` 每行都有 `write_ok: true`（缺字段 = 证据不足，验收会判 fail）
+- 收尾还有 `referee_serial_final`：`marking_frames` / `radar_info_frames` 说明
+  `0x020C`/`0x020E` 真的读到了，`write_errors` 为 0。**串口只归 runner 一个进程**，
+  接收节点在联合启动下不碰它。
 - 无连续 0.5 秒断流（看 `referee_tx_final` 与 `referee_live.jsonl` 相邻 `t` 的差 ≤0.5s）
 - 串口侧抓包核对 48 字节布局：对方重装 0–3、对方 3/4 号 8–15、对方哨兵 20–23、己方 24–27 /
   32–39 / 44–47，保留位全 0

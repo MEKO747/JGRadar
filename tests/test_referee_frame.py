@@ -97,3 +97,19 @@ def test_writer_callback_reports_failure_instead_of_silently_swallowing_it():
     assert writer(PAYLOAD) is False
     assert writer.frames_written == 0
     assert writer.failed is True
+
+
+def test_writer_carries_the_real_reason_from_an_injected_failure():
+    """注入回调返回 False 时，要把底层原因（拔线/超时）带出来，而不是一句空话。"""
+    class Link:
+        last_write_error = "SerialException: device reports readiness but returned no data"
+
+        def write(self, _frame: bytes) -> bool:
+            return False
+
+    messages: list[str] = []
+    writer = RadarPositionWriter(write=Link().write, logger=messages.append)
+    assert writer.write(PAYLOAD) is None
+    assert writer.failed is True
+    assert "SerialException" in (writer.last_error or "")
+    assert any("SerialException" in message for message in messages)

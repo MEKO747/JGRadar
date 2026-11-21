@@ -3,6 +3,7 @@ set -eo pipefail
 JG_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ "${1:-}" != red && "${1:-}" != blue ]]; then
   echo 'Usage: bash tools/start_radio_vision.sh red|blue [--no-rx] [--sdr-uri URI] [runner options]' >&2
+  echo '  --referee-serial /dev/ttyUSB0 --referee-level  只给 runner：串口单点所有权' >&2
   exit 2
 fi
 team="$1"
@@ -15,6 +16,8 @@ rx_args=()
 while (($#)); do
   case "$1" in
     --no-rx) with_rx=0; shift ;;
+    # 裁判串口**只给 runner**：它一个 fd 同时读 0x020C/0x020E、写 0x0305。
+    # 接收节点在联合启动下完全不碰串口，只订阅 /rmuc/demod_config。
     --sdr-uri|--flowgraph-python)
       if (($# < 2)) || [[ "$2" == --* ]]; then echo "$1 needs a value" >&2; exit 2; fi
       rx_args+=("$1" "$2"); shift 2 ;;

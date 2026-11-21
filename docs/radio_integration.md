@@ -130,6 +130,18 @@ bash tools/start_radio_vision.sh red --radio-only --referee-tx --referee-serial 
   （`write_mode: dry_run`，`write_ok` 恒为 false，**不算发送**）；
   运行中拔线则每次写失败都记一次（`frames_failed`），统计里看得见。
 
+### 裁判串口的所有权（联合启动）
+
+联合启动时**串口只归 runner**：它一个 fd 同时做两件事——读 `0x020C`/`0x020E`、
+写 `0x0305`。接收节点完全不碰串口，只订阅 `/rmuc/demod_config`。
+
+- 两个进程抢同一个 tty 在物理上不成立（读走字节、写没有同步），所以先定所有权。
+- `--referee-level` 打开后，`0x020E` 的加密等级**变化时**发一次
+  `/rmuc/demod_config`；不再每秒重发（那会把接收侧刚切好的等级顶回去）。
+- 接收节点单独运行时才自己开串口（`rmuc_ros2_node.py --referee-serial`），
+  这条路径和联合启动互斥。
+- 拔线不崩：写失败返回 `False`（`write_ok: false`），读线程收到异常只报一次警告。
+
 线格式（`0xA5` 帧头 + CRC8 + CRC16）在 `radio/radar_parse_em_wave/rmuc/referee_frame.py`，
 和接收方向共用同一份 CRC 表。统计字段分三态：`frames_composed`（组帧）、
 `frames_sent`（**串口写成功**）、`frames_failed`（写失败），另有 `throttled`

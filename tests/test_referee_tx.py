@@ -424,3 +424,21 @@ def test_referee_log_line_records_the_failure_reason(tmp_path):
     row = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
     assert row["write_ok"] is False
     assert "device unplugged" in row["write_error"]
+
+
+def test_send_failure_carries_the_transport_reason():
+    """回调自己知道为什么没写出去时，统计里要有那句话，不能只剩「失败了」。"""
+    class Broken:
+        last_error = "SerialException: device reports readiness but returned no data"
+
+        def __call__(self, _payload: bytes) -> bool:
+            return False
+
+    now = {"t": 0.0}
+    broken = Broken()
+    sender = RobotPositionSender(broken, rate_hz=4.8, clock=lambda: now["t"])
+    rig = Rig()
+    sender.update(rig.frame(0.0))
+    sender.tick()
+    assert sender.stats.frames_sent == 0
+    assert "SerialException" in (sender.last_write_error or "")

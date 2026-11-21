@@ -29,7 +29,7 @@ def main() -> None:
                         help="裁判系统串口（服务器→雷达的 0x020C/0x020E），例如 /dev/ttyUSB0")
     parser.add_argument("--referee-baud", type=int, default=115200)
     parser.add_argument("--referee-level", action="store_true",
-                        help="用 0x020E 的加密等级驱动解调等级，不再吃 /rmuc/demod_config 的等级")
+                        help="用 0x020E 的加密等级驱动解调等级，并在等级变化时重发 /rmuc/demod_config")
     args, ros_args = parser.parse_known_args()
 
     share = Path(get_package_share_directory("radar_parse_em_wave"))
@@ -54,14 +54,19 @@ def main() -> None:
     if args.referee_serial:
         read, close = open_serial_reader(args.referee_serial, args.referee_baud)
         own_team = lambda: node.demod_config.team.value[:1]  # noqa: E731
+
+        def on_radar_info(info) -> None:
+            node.publish_radar_info(info)
+            # 等级变了必须**重发一次配置**：只改节点内部值的话，融合侧订阅的
+            # /rmuc/demod_config 还是旧等级，会一直按 1 级解（旧实现的坑）。
+            if args.referee_level and node.set_interference_level(info.encryption_level):
+                node.publish_demod_config()
+
         referee = RefereeWorker(
             read=read,
             get_own_team=own_team,
             on_marking=lambda marking: node.publish_marking(marking, own_team=own_team()),
-            on_radar_info=lambda info: (
-                node.publish_radar_info(info),
-                args.referee_level and node.set_interference_level(info.encryption_level),
-            ),
+            on_radar_info=on_radar_info,
             warn=lambda message: logger.warning(message, throttle_duration_sec=5),
             close=close,
         )

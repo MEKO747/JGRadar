@@ -347,6 +347,10 @@ class RobotPositionSender:
             return False, f"{type(exc).__name__}: {exc}"
         if result is True:
             return True, None
+        # 回调自己记了原因（拔线/超时）就带上来，比一句"失败了"有用得多
+        detail = getattr(self._send, "last_error", None)
+        if detail:
+            return False, str(detail)
         if result is None:
             return False, "发送回调没有返回成功标记（无法证明写进串口）"
         return False, f"发送回调报告失败：{result!r}"

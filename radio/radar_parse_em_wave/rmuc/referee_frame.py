@@ -90,13 +90,19 @@ class RadarPositionWriter:
         return self.write(payload) is not None
 
     def write(self, payload: bytes) -> bytes | None:
-        """包帧并写出，返回写出的完整帧（离线验证时方便断言）。"""
+        """包帧并写出，返回写出的完整帧（离线验证时方便断言）。
+
+        注入的 ``write`` 回调如果说 ``False``，同样按失败处理——「回调自己知道
+        没写进去」和「抛异常」是一回事，不能因为没抛异常就算成功。
+        """
         if self.failed:
             return None
         frame = build_radar_frame(payload, seq=self._seq)
         try:
             if self._write is not None:
-                self._write(frame)
+                if self._write(frame) is False:
+                    # 把底层真实原因带上来（拔线/权限/超时），别只留一句"回调失败"
+                    raise OSError(self._callback_error())
             else:
                 assert self._serial is not None
                 self._serial.write(frame)
@@ -108,6 +114,14 @@ class RadarPositionWriter:
         self.frames_written += 1
         self._seq = (self._seq + 1) & 0xFF
         return frame
+
+    def _callback_error(self) -> str:
+        """注入回调自己记的失败原因；没有就给一句通用说明。"""
+        for target in (self._write, getattr(self._write, "__self__", None)):
+            reason = getattr(target, "last_write_error", None)
+            if reason:
+                return str(reason)
+        return "注入的写回调报告失败"
 
     def close(self) -> None:
         if self._serial is not None:

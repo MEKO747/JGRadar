@@ -22,6 +22,7 @@ from radar_parse_em_wave.msg import (
 from std_msgs.msg import String
 
 from jg_radar.integration.game_radio import POSITION_SLOTS, RadioAdapter
+from jg_radar.integration.level_sync import LevelSync
 
 
 DEMOD_CONFIG_TOPIC = "/rmuc/demod_config"
@@ -51,10 +52,16 @@ class RadioBridge:
             self.node.create_subscription(msg_type, topic, self._status_callback(kind), qos)
         self.node.create_subscription(
             RadarParseEmWaveDemodConfig, DEMOD_CONFIG_TOPIC, self._receive_config, 10)
+        # 只在启动时发一次、之后**变化时才发**。以前这里每秒重发一次固定等级，
+        # 把接收节点刚从 0x020E 切到的等级又顶回去——那是「等级不生效」的主因。
+        self._config_pub = self.node.create_publisher(
+            RadarParseEmWaveDemodConfig, DEMOD_CONFIG_TOPIC, 10)
+        self._level_sync = LevelSync(self._publish_level, initial=interference_level)
+        self._config = None
         if interference_level is not None:
-            config_pub = self.node.create_publisher(RadarParseEmWaveDemodConfig, DEMOD_CONFIG_TOPIC, 10)
-            config = RadarParseEmWaveDemodConfig(team=adapter.team, interference_level=interference_level)
-            self.node.create_timer(1.0, lambda: config_pub.publish(config))
+            self._config = (adapter.team, int(interference_level))
+            self._publish_level(int(interference_level))
+        self._referee_topics = None
         self.fused_pub = self.node.create_publisher(String, "/jg_radar/fused", qos)
         self.status_pub = self.node.create_publisher(String, "/jg_radar/radio_status", qos)
         self.executor = SingleThreadedExecutor(context=self.context)
@@ -73,6 +80,46 @@ class RadioBridge:
         if stamp_ns <= 0:
             raise ValueError("Receiver packet is missing its publication timestamp")
         return now, (time.time_ns() - stamp_ns) / 1e9
+
+    def _publish_level(self, level: int) -> None:
+        """把配置发出去（调用方保证「只在变化时」）。"""
+        self._config_pub.publish(
+            RadarParseEmWaveDemodConfig(team=self.adapter.team, interference_level=int(level)))
+
+    def set_level(self, level: int) -> bool:
+        """``0x020E`` 驱动的等级变更：变了才发，返回是否发了。
+
+        级别来自裁判系统，**比本地默认值优先**；同时更新 ``_config``，
+        让 ``0x0A01`` 的受理条件立刻跟着变，不用等话题回声。
+        """
+        level = int(level)
+        if level not in (1, 2, 3):
+            return False
+        if self._level_sync.level == level:
+            return False
+        self._config = (self.adapter.team, level)
+        return self._level_sync.set(level)
+
+    def level_snapshot(self) -> dict:
+        """当前等级与「发了几次」——现场判断等级有没有跟着 0x020E 变。"""
+        data = self._level_sync.snapshot()
+        data["config"] = list(self._config) if self._config else None
+        return data
+
+    @property
+    def referee_topics(self):
+        """共用的话题发布器（0x020C / 0x020E / demod_config）。"""
+        if self._referee_topics is None:
+            from rmuc.referee_topics import RefereeTopics
+
+            self._referee_topics = RefereeTopics(self.node)
+        return self._referee_topics
+
+    def publish_marking(self, marking, *, own_team: str = "R") -> None:
+        self.referee_topics.publish_marking(marking, own_team=own_team)
+
+    def publish_radar_info(self, info) -> None:
+        self.referee_topics.publish_radar_info(info)
 
     def _receive_config(self, msg):
         team = TEAM_NAMES.get(msg.team.strip().lower())

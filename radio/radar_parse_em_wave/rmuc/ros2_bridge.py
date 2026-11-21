@@ -6,8 +6,6 @@ from __future__ import annotations
 from rclpy.node import Node
 
 from radar_parse_em_wave.msg import (
-    RadarParseEmWave020CMarking,
-    RadarParseEmWave020ERadarInfo,
     RadarParseEmWave0A01RobotPosition,
     RadarParseEmWave0A02RobotHp,
     RadarParseEmWave0A03RobotAmmo,
@@ -21,13 +19,11 @@ from dataclasses import replace
 
 from .constants import Team
 from .referee import MarkingProgress, RadarInfo
+from .referee_topics import DEMOD_CONFIG_TOPIC, REFEREE_TOPICS, RefereeTopics
 from .state import DemodConfig
 
 
 # ==================== ROS2 话题配置 ====================
-
-DEMOD_CONFIG_TOPIC = "/rmuc/demod_config"
-"""解调参数配置订阅话题。"""
 
 RX_PACKET_TOPICS = {
     "0x0A01": "/rmuc/rx/packet_0x0a01",
@@ -38,13 +34,6 @@ RX_PACKET_TOPICS = {
     "0x0A06": "/rmuc/rx/packet_0x0a06",
 }
 """业务包发布话题。topic 片段不能以数字开头，因此加 packet_ 前缀。"""
-
-REFEREE_TOPICS = {
-    "0x020C": "/rmuc/referee/packet_0x020c",
-    "0x020E": "/rmuc/referee/packet_0x020e",
-}
-"""裁判系统下发给雷达的两条接口。和无线链路的 0x0Axx 分开一组话题。"""
-
 
 class RadarParseEmWaveRos2Bridge(Node):
     def __init__(self):
@@ -90,14 +79,8 @@ class RadarParseEmWaveRos2Bridge(Node):
                 10,
             ),
         }
-        self._referee_publishers = {
-            "0x020C": self.create_publisher(
-                RadarParseEmWave020CMarking, REFEREE_TOPICS["0x020C"], 10
-            ),
-            "0x020E": self.create_publisher(
-                RadarParseEmWave020ERadarInfo, REFEREE_TOPICS["0x020E"], 10
-            ),
-        }
+        # 0x020C / 0x020E / demod_config 的发布与联合 runner 共用一份实现
+        self.topics = RefereeTopics(self)
 
     def _handle_demod_config(self, msg: RadarParseEmWaveDemodConfig) -> None:
         """用主程序下发的阵营和等级更新接收配置。"""
@@ -136,30 +119,20 @@ class RadarParseEmWaveRos2Bridge(Node):
 
     def publish_marking(self, marking: MarkingProgress, *, own_team: str = "R") -> None:
         """发布 0x020C（对方易伤 / 己方特殊标识）。"""
-        side = own_team.upper()[:1]
-        enemy = "B" if side == "R" else "R"
-        msg = RadarParseEmWave020CMarking()
-        self._fill_header(msg, "rmuc_020c")
-        msg.raw = int(marking.raw)
-        for role, suffix in (("1", "hero"), ("3", "infantry3"), ("4", "infantry4"), ("7", "sentry")):
-            setattr(msg, f"enemy_{suffix}_vulnerable", f"{enemy}{role}" in marking.enemy_vulnerable)
-            setattr(msg, f"own_{suffix}_marked", f"{side}{role}" in marking.own_marked)
-        self._referee_publishers["0x020C"].publish(msg)
+        self.topics.publish_marking(marking, own_team=own_team)
 
     def publish_radar_info(self, info: RadarInfo) -> None:
         """发布 0x020E（自主决策信息同步）。"""
-        msg = RadarParseEmWave020ERadarInfo()
-        self._fill_header(msg, "rmuc_020e")
-        msg.dual_vulnerability_chances = int(info.dual_vulnerability_chances)
-        msg.enemy_dual_vulnerable = bool(info.enemy_dual_vulnerable)
-        msg.encryption_level = int(info.encryption_level)
-        msg.key_modifiable = bool(info.key_modifiable)
-        msg.armor_active = bool(info.armor_active)
-        msg.armor_chances_left = int(info.armor_chances_left)
-        msg.armor_center_x_mm = int(info.armor_center_x_mm)
-        msg.armor_center_y_mm = int(info.armor_center_y_mm)
-        msg.armor_radius_mm = int(info.armor_radius_mm)
-        self._referee_publishers["0x020E"].publish(msg)
+        self.topics.publish_radar_info(info)
+
+    def publish_demod_config(self) -> None:
+        """把当前解调配置发一次。
+
+        单独运行接收节点、由 ``--referee-level`` 驱动时用：等级变了必须让融合侧
+        知道，不能只改节点内部值（旧实现就是这样，融合端一直用旧等级）。
+        """
+        config = self.demod_config
+        self.topics.publish_demod_config(config.team.value, config.interference_level)
 
     def publish_decoded_packet(self, decoded: dict) -> None:
         """发布通过 CRC 和业务长度校验的数据。"""

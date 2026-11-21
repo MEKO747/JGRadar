@@ -28,8 +28,9 @@ def parse_args(argv=None):
     parser.add_argument("--team", choices=("red", "blue"), required=True, help="own team")
     parser.add_argument("--config", action="append", default=[], help="vision YAML; repeat to overlay")
     parser.add_argument("--radio-frame", choices=("red_field", "own_team"), default="red_field")
-    parser.add_argument("--interference-level", choices=("1", "2", "3", "external"), default="1",
-                        help="receiver level to publish, or external to follow /rmuc/demod_config")
+    parser.add_argument("--interference-level", choices=("1", "2", "3", "external"), default=None,
+                        help="发射的解调等级；external = 跟着 /rmuc/demod_config。缺省时"
+                             "referee-level 驱动用 external，否则 1")
     parser.add_argument("--input-latency", type=float, default=0.0,
                         help="measured RF-to-ROS-publication delay in seconds")
     parser.add_argument("--radio-only", action="store_true", help="subscribe and arbitrate without camera")
@@ -39,7 +40,10 @@ def parse_args(argv=None):
     parser.add_argument("--referee-tx", action="store_true",
                         help=f"按 {DEFAULT_RATE_HZ:g}Hz 把融合结果发成 0x0305（雷达→服务器→选手端）")
     parser.add_argument("--referee-serial", default="",
-                        help="0x0305 的串口设备，例如 /dev/ttyUSB0；不填则只统计不发送")
+                        help="裁判系统串口（读 0x020C/0x020E + 写 0x0305，同一个 fd）；"
+                             "不填则只统计不发送")
+    parser.add_argument("--referee-level", action="store_true",
+                        help="用 0x020E 的加密等级驱动解调等级，并在变化时重发 /rmuc/demod_config")
     parser.add_argument("--referee-baud", type=int, default=115200)
     parser.add_argument("--referee-rate-hz", type=float, default=DEFAULT_RATE_HZ,
                         help="发送频率，默认值取自 referee_tx.DEFAULT_RATE_HZ；协议上限 5Hz，写大了会被夹到 5")
@@ -59,26 +63,15 @@ def parse_args(argv=None):
     return args
 
 
-def _build_referee_tx(args):
-    """构造 0x0305 发送端。串口打不开就退化成只统计，不拖垮视觉主循环。"""
-    from jg_radar.integration.referee_tx import MAX_RATE_HZ, RobotPositionSender
-
+def _referee_package_path() -> None:
     radio_package = ROOT / "radio" / "radar_parse_em_wave"
     if str(radio_package) not in sys.path:
         sys.path.insert(0, str(radio_package))
-    from rmuc.referee_frame import RadarPositionWriter
 
-    writer = None
-    if args.referee_serial:
-        try:
-            writer = RadarPositionWriter(
-                args.referee_serial,
-                baudrate=args.referee_baud,
-                logger=lambda message: print(message, flush=True),
-            )
-        except Exception as exc:
-            print(json.dumps({"referee_tx_error": str(exc), "serial": args.referee_serial,
-                              "mode": "dry_run"}, ensure_ascii=False), flush=True)
+
+def _build_referee_tx(args, writer):
+    """构造 0x0305 发送端。串口打不开就退化成只统计，不拖垮视觉主循环。"""
+    from jg_radar.integration.referee_tx import MAX_RATE_HZ, RobotPositionSender
 
     if writer is not None:
         send = writer
@@ -102,6 +95,41 @@ def _build_referee_tx(args):
                           "requested": args.referee_rate_hz, "applied": sender.rate_hz},
                          ensure_ascii=False), flush=True)
     return sender, writer
+
+
+def _open_referee_link(args, bridge):
+    """裁判串口归 runner：**一个 fd** 同时负责读 0x020C/0x020E 和写 0x0305。
+
+    两个进程抢同一个串口在物理上不成立（读走字节、写没有同步），所以联合启动
+    时接收节点完全不碰串口，只订阅 /rmuc/demod_config。
+    """
+    if not args.referee_serial:
+        return None
+    _referee_package_path()
+    from rmuc.referee_link import RefereeSerialLink
+
+    own_team = lambda: args.team[:1].upper()  # noqa: E731
+
+    def on_marking(marking) -> None:
+        bridge.publish_marking(marking, own_team=own_team())
+
+    def on_radar_info(info) -> None:
+        bridge.publish_radar_info(info)
+        # 等级变了就在**变化时**发一次配置：接收节点据此切 SDR，融合侧据此受理 0x0A01
+        if args.referee_level:
+            bridge.set_level(info.encryption_level)
+
+    link = RefereeSerialLink(
+        args.referee_serial,
+        args.referee_baud,
+        on_marking=on_marking,
+        on_radar_info=on_radar_info,
+        get_own_team=own_team,
+        warn=lambda message: print(json.dumps({"referee_serial_warning": message},
+                                              ensure_ascii=False), flush=True),
+    )
+    link.start()
+    return link
 
 
 def _log_referee_frame(handle, referee, writer) -> None:
@@ -160,6 +188,10 @@ def main(argv=None):
             from jg_radar.integration.referee_tx import MAX_RATE_HZ
             referee = {
                 "serial": args.referee_serial or None,
+                "owns_serial": bool(args.referee_serial),
+                "referee_level": bool(args.referee_level),
+                "interference_level": args.interference_level or (
+                    "external" if args.referee_level else "1"),
                 "rate_hz": min(args.referee_rate_hz, MAX_RATE_HZ),
                 "rate_clamped": args.referee_rate_hz > MAX_RATE_HZ,
                 "stale_policy": args.referee_stale_policy,
@@ -167,7 +199,8 @@ def main(argv=None):
             }
         print(json.dumps({"ros_messages": "ready", "team": args.team,
                           "protocol": PROTOCOL, "radio_frame": args.radio_frame,
-                          "interference_level": args.interference_level,
+                          "interference_level": args.interference_level or (
+                              "external" if args.referee_level else "1"),
                           "referee_tx": referee,
                           "vision_configs": [str(p) for p in paths]}, ensure_ascii=False))
         return 0
@@ -192,18 +225,36 @@ def main(argv=None):
     sink = None
     referee = None
     referee_writer = None
+    referee_link = None
     referee_log = None
     iterator = None
     started = time.monotonic()
     frames = 0
     last_report = started
     try:
-        level = None if args.interference_level == "external" else int(args.interference_level)
+        level_text = args.interference_level or ("external" if args.referee_level else "1")
+        level = None if level_text == "external" else int(level_text)
         bridge = RadioBridge(adapter, interference_level=level)
         if args.out:
             sink = JsonlSink(args.out)
         if args.referee_tx:
-            referee, referee_writer = _build_referee_tx(args)
+            link = None
+            if args.referee_serial:
+                _referee_package_path()
+                from rmuc.referee_frame import RadarPositionWriter
+
+                try:
+                    link = _open_referee_link(args, bridge)
+                    referee_link = link
+                    referee_writer = RadarPositionWriter(write=link.write)
+                except Exception as exc:
+                    link = None
+                    referee_link = None
+                    referee_writer = None
+                    print(json.dumps({"referee_tx_error": str(exc),
+                                      "serial": args.referee_serial,
+                                      "mode": "dry_run"}, ensure_ascii=False), flush=True)
+            referee, referee_writer = _build_referee_tx(args, writer=referee_writer)
             if args.referee_log:
                 referee_log = open(args.referee_log, "a", encoding="utf-8")
         if loop is not None:
@@ -231,7 +282,8 @@ def main(argv=None):
                 report = {"frames": frames, "radio_frames": adapter.position_frames,
                           "rejected_radio_frames": adapter.rejected_frames,
                           "active_sources": active,
-                          "tier_share": stage_b.publisher.tier_share()}
+                          "tier_share": stage_b.publisher.tier_share(),
+                    "interference_level": bridge.level_snapshot()}
                 if referee is not None:
                     report["referee_tx"] = referee.snapshot()
                 print(json.dumps(report, ensure_ascii=False), flush=True)
@@ -251,13 +303,18 @@ def main(argv=None):
             referee_log.close()
         if referee_writer is not None:
             referee_writer.close()
+        if referee_link is not None:
+            referee_link.stop()
+            print(json.dumps({"referee_serial_final": referee_link.snapshot()},
+                             ensure_ascii=False), flush=True)
         if referee is not None:
             print(json.dumps({"referee_tx_final": referee.snapshot()}, ensure_ascii=False),
                   flush=True)
         for sig, handler in previous_signals.items():
             signal.signal(sig, handler)
     print(json.dumps({"frames": frames, "radio_frames": adapter.position_frames,
-                      "tier_share": stage_b.publisher.tier_share()}, ensure_ascii=False))
+                      "tier_share": stage_b.publisher.tier_share(),
+                    "interference_level": bridge.level_snapshot()}, ensure_ascii=False))
     return 0
 
 
