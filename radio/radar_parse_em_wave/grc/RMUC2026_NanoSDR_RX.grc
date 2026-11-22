@@ -34,6 +34,19 @@ options:
     rotation: 0
     state: enabled
 blocks:
+- name: import_fft_window
+  id: import
+  parameters:
+    imports: from gnuradio.fft import window
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 8
+    - 164.0
+    rotation: 0
+    state: enabled
 - name: bt
   id: variable
   parameters:
@@ -163,8 +176,8 @@ blocks:
 - name: rx_info_fir_taps
   id: variable
   parameters:
-    comment: ''
-    value: firdes.low_pass(1, samp_rate, rx_info_bw/2, 20000)
+    comment: Retain both GFSK tones while rejecting the adjacent level-3 channel.
+    value: firdes.low_pass(1, samp_rate, rx_info_bw/2 - 11000, 12000, window.WIN_KAISER, 8)
   states:
     bus_sink: false
     bus_source: false
